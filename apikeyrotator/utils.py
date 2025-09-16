@@ -1,20 +1,22 @@
 import time
-from typing import Callable, Any
+from typing import Callable, Any, Type
+import requests
 
 
 def retry_with_backoff(
         func: Callable,
         retries: int = 3,
         backoff_factor: float = 0.5,
-        exceptions: tuple = (Exception,)
+        exceptions: Type[Exception] = Exception
 ) -> Any:
     """
-    Повторяет вызов функции с экспоненциальной задержкой при ошибках.
+    Универсальная функция для повторных попыток с экспоненциальной задержкой.
 
-    :param func: Вызываемая функция
-    :param retries: Количество попыток
-    :param backoff_factor: Множитель для задержки (0.5 → 0.5s, 1s, 2s...)
-    :param exceptions: Какие исключения ловить для повтора
+    Пример использования:
+    response = retry_with_backoff(
+        lambda: requests.get('https://api.example.com'),
+        exceptions=requests.RequestException
+    )
     """
     for attempt in range(retries):
         try:
@@ -24,3 +26,4 @@ def retry_with_backoff(
                 raise e
             delay = backoff_factor * (2 ** attempt)
             time.sleep(delay)
+            print(f"Retry {attempt + 1}/{retries} after {delay:.1f}s delay")

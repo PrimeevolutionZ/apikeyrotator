@@ -1,15 +1,11 @@
-class APIKeyExhaustedError(Exception):
-    """Все ключи исчерпаны, запрос не удался"""
+class APIKeyError(Exception):
+    """Базовое исключение для ошибок API ключей"""
     pass
 
-
-class NoAPIKeysError(Exception):
-    """Не найдено ни одного API-ключа в .env"""
+class NoAPIKeysError(APIKeyError):
+    """Не найдено ни одного API ключа"""
     pass
 
-
-class APIRequestFailedError(Exception):
-    """Запрос не удался даже после всех попыток"""
-    def __init__(self, message: str, last_response=None):
-        super().__init__(message)
-        self.last_response = last_response
+class AllKeysExhaustedError(APIKeyError):
+    """Все ключи исчерпаны"""
+    pass
