@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apikeyrotator"
-version = "0.0.2"
+version = "0.0.3"
 description = "Ultra simple API key rotation for bypassing rate limits"
 readme = "README.md"
 authors = [
@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 keywords = ["api", "rotation", "rate limit", "requests"]
-dependencies = ["requests>=2.25.0"]
+dependencies = ["requests>=2.25.0", "aiohttp>=3.8.0"]
 
 [project.urls]
 Homepage = "https://github.com/PrimeevolutionZ/apikeyrotator"
