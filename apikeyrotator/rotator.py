@@ -387,21 +387,23 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
     ) -> aiohttp.ClientResponse:
         """
         Выполняет асинхронный запрос. Просто как aiohttp, но с ротацией ключей!
+        Возвращает объект, который можно использовать с `async with`.
         """
         self.logger.info(f"Initiating async {method} request to {url} with key rotation.")
         session = await self._get_session()
 
         domain = self._get_domain_from_url(url)
 
-        for _ in range(len(self.keys)):
+        async def _perform_single_request_with_key_coroutine():
             key = self.get_next_key()
             headers, cookies = self._prepare_headers_and_cookies(key, kwargs.get("headers"), url)
-            kwargs["headers"] = headers
-            kwargs["cookies"] = cookies # Add cookies to kwargs
+            request_kwargs = kwargs.copy()
+            request_kwargs["headers"] = headers
+            request_kwargs["cookies"] = cookies
 
             proxy = self.get_next_proxy()
             if proxy:
-                kwargs["proxy"] = proxy
+                request_kwargs["proxy"] = proxy
                 self.logger.info(f"🌐 Using proxy: {proxy} for current request.")
 
             if self.random_delay_range:
@@ -409,35 +411,32 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                 self.logger.info(f"⏳ Applying random delay of {delay:.2f} seconds.")
                 await asyncio.sleep(delay)
 
-            async def _perform_single_request_with_key():
-                self.logger.debug(f"Performing async request with key {key[:8]}... and headers: {headers}")
-                async with session.request(method, url, **kwargs) as async_response_obj:
-                    self.logger.debug(f"Received async response with status code: {async_response_obj.status}")
-                    if self._should_retry(async_response_obj.status):
-                        self.logger.warning(f"↻ Key {key[:8]}... returned status {async_response_obj.status}. Retrying with same key...")
-                        async_response_obj.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
-                    return async_response_obj
+            self.logger.debug(f"Performing async request with key {key[:8]}... and headers: {headers}")
+            response_obj = await session.request(method, url, **request_kwargs)
+            self.logger.debug(f"Received async response with status code: {response_obj.status}")
 
-            try:
-                async_response_obj = await async_retry_with_backoff(
-                    _perform_single_request_with_key,
-                    retries=self.max_retries, # Max retries for this specific key
-                    backoff_factor=self.base_delay,
-                    exceptions=aiohttp.ClientError
-                )
-                self.logger.info(f"✅ Async request successful with key {key[:8]}... Status: {async_response_obj.status}")
-                # Save successful headers for this domain
-                if domain not in self.config.get("successful_headers", {}):
-                    self.config.setdefault("successful_headers", {})[domain] = headers
-                    self._save_config()
-                    self.logger.info(f"Saved successful headers for domain: {domain}")
-                return async_response_obj
-            except aiohttp.ClientError as e:
-                self.logger.error(f"⚠️ All retries failed for key {key[:8]}...: {e}. Trying next key...")
-                # Continue to the next key in the outer loop
+            if self._should_retry(response_obj.status):
+                self.logger.warning(f"↻ Key {key[:8]}... returned status {response_obj.status}. Retrying with same key...")
+                await response_obj.release() # Release connection for retry
+                raise aiohttp.ClientError(f"Status {response_obj.status} indicates retry needed.")
 
-        self.logger.error(f"❌ All {self.key_count} keys exhausted after {self.max_retries} attempts each for {url}.")
-        raise AllKeysExhaustedError(f"All {self.key_count} keys exhausted after {self.max_retries} attempts each")
+            self.logger.info(f"✅ Async request successful with key {key[:8]}... Status: {response_obj.status}")
+            # Save successful headers for this domain
+            if domain not in self.config.get("successful_headers", {}):
+                self.config.setdefault("successful_headers", {})[domain] = headers
+                self._save_config()
+                self.logger.info(f"Saved successful headers for domain: {domain}")
+            return response_obj
+
+        # The async_retry_with_backoff will try all keys until success or exhaustion
+        final_response = await async_retry_with_backoff(
+            _perform_single_request_with_key_coroutine,
+            retries=len(self.keys) * self.max_retries, # Total attempts across all keys
+            backoff_factor=self.base_delay,
+            exceptions=aiohttp.ClientError
+        )
+
+        return final_response
 
     async def get(self, url, **kwargs) -> aiohttp.ClientResponse:
         return await self.request("GET", url, **kwargs)

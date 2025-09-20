@@ -112,6 +112,8 @@ except Exception as e:
 
 The asynchronous version, `AsyncAPIKeyRotator`, works seamlessly with `asyncio` and has a similar API to `aiohttp`.
 
+**Important Note on Usage:** When using `AsyncAPIKeyRotator` methods (like `get`, `post`, etc.) with `async with`, you must `await` the method call itself, as it returns a coroutine that resolves to an `aiohttp.ClientResponse` object, which is the actual asynchronous context manager.
+
 ```python
 import asyncio
 from apikeyrotator import AsyncAPIKeyRotator
@@ -122,7 +124,8 @@ async def main():
         max_retries=3
     ) as rotator:
         try:
-            async with rotator.get("https://api.example.com/async_data") as response:
+            # Correct usage: await the rotator.get(url) call before async with
+            async with await rotator.get("https://api.example.com/async_data") as response:
                 response.raise_for_status()
                 data = await response.json()
                 print(f"Async Success: {response.status}", data)
@@ -144,7 +147,7 @@ Define custom conditions for when a request should be retried.
 
 ```python
 import requests
-from apikeyrotator import *
+
 def custom_retry_logic(response: requests.Response) -> bool:
     # Retry on 429 (Too Many Requests) or if the response body contains 'error'.
     if response.status_code == 429:
@@ -163,7 +166,6 @@ Dynamically generate headers and cookies, perfect for handling complex authentic
 
 ```python
 from typing import Tuple, Optional, Dict
-from apikeyrotator import *
 
 def dynamic_header_and_cookie_generator(key: str, existing_headers: Optional[Dict]) -> Tuple[Dict, Dict]:
     headers = {"X-Custom-Auth": f"Token {key}"}
