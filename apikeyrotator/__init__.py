@@ -1,7 +1,7 @@
 from .rotator import APIKeyRotator, AsyncAPIKeyRotator
 from .exceptions import APIKeyError, NoAPIKeysError, AllKeysExhaustedError
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Prime Evolution"
 __email__ = "develop@eclps-team.ru"
 
