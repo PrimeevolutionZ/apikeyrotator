@@ -30,3 +30,4 @@ dependencies = ["requests>=2.25.0", "aiohttp>=3.8.0", "python-dotenv>=1.0.0"]
 Homepage = "https://github.com/PrimeevolutionZ/apikeyrotator"
 Repository = "https://github.com/PrimeevolutionZ/apikeyrotator"
 Issues = "https://github.com/PrimeevolutionZ/apikeyrotator/issues"
+

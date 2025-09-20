@@ -54,6 +54,8 @@ class BaseKeyRotator:
         if load_env_file and _DOTENV_INSTALLED:
             self.logger.debug("Attempting to load .env file.")
             load_dotenv()
+        elif load_env_file and not _DOTENV_INSTALLED:
+            self.logger.warning("python-dotenv is not installed. Cannot load .env file. Please install it with `pip install python-dotenv`.")
 
         self.keys = self._parse_keys(api_keys, env_var)
         self.max_retries = max_retries
@@ -88,7 +90,8 @@ class BaseKeyRotator:
         with open(self.config_file, 'w') as f:
             json.dump(self.config, f, indent=4)
 
-    def _get_domain_from_url(self, url: str) -> str:
+    @staticmethod
+    def _get_domain_from_url(url: str) -> str:
         from urllib.parse import urlparse
         parsed_url = urlparse(url)
         return parsed_url.netloc
@@ -289,19 +292,19 @@ class APIKeyRotator(BaseKeyRotator):
 
             try:
                 self.logger.debug(f"Attempt {attempt + 1}/{self.max_retries} with key {key[:8]}... and headers: {headers}")
-                response = self.session.request(method, url, **kwargs)
-                self.logger.debug(f"Received response with status code: {response.status_code}")
+                response_obj = self.session.request(method, url, **kwargs)
+                self.logger.debug(f"Received response with status code: {response_obj.status_code}")
 
-                if not self._should_retry(response):
-                    self.logger.info(f"✅ Request successful with key {key[:8]}... Status: {response.status_code}")
+                if not self._should_retry(response_obj):
+                    self.logger.info(f"✅ Request successful with key {key[:8]}... Status: {response_obj.status_code}")
                     # Save successful headers for this domain
                     if domain not in self.config.get("successful_headers", {}):
                         self.config.setdefault("successful_headers", {})[domain] = headers
                         self._save_config()
                         self.logger.info(f"Saved successful headers for domain: {domain}")
-                    return response
+                    return response_obj
 
-                self.logger.warning(f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... rate limited or error: {response.status_code}. Retrying...")
+                self.logger.warning(f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... rate limited or error: {response_obj.status_code}. Retrying...")
 
             except requests.RequestException as e:
                 self.logger.error(f"⚠️ Network error with key {key[:8]}... on attempt {attempt + 1}/{self.max_retries}: {e}. Trying next key or retrying...")
@@ -312,7 +315,7 @@ class APIKeyRotator(BaseKeyRotator):
                 time.sleep(delay)
 
         self.logger.error(f"❌ All {len(self.keys)} keys exhausted after {self.max_retries} attempts each for {url}.")
-        raise AllKeysExhaustedError(f"All {len(self.keys)} keys exhausted after {self.max_retries} attempts")
+        raise AllKeysExhaustedError(f"All {len(self.keys)} keys exhausted after {self.max_retries} attempts each")
 
     def get(self, url, **kwargs):
         return self.request("GET", url, **kwargs)
@@ -408,27 +411,27 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
             async def _perform_single_request_with_key():
                 self.logger.debug(f"Performing async request with key {key[:8]}... and headers: {headers}")
-                async with session.request(method, url, **kwargs) as response:
-                    self.logger.debug(f"Received async response with status code: {response.status}")
-                    if self._should_retry(response.status):
-                        self.logger.warning(f"↻ Key {key[:8]}... returned status {response.status}. Retrying with same key...")
-                        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
-                    return response
+                async with session.request(method, url, **kwargs) as async_response_obj:
+                    self.logger.debug(f"Received async response with status code: {async_response_obj.status}")
+                    if self._should_retry(async_response_obj.status):
+                        self.logger.warning(f"↻ Key {key[:8]}... returned status {async_response_obj.status}. Retrying with same key...")
+                        async_response_obj.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+                    return async_response_obj
 
             try:
-                response = await async_retry_with_backoff(
+                async_response_obj = await async_retry_with_backoff(
                     _perform_single_request_with_key,
                     retries=self.max_retries, # Max retries for this specific key
                     backoff_factor=self.base_delay,
                     exceptions=aiohttp.ClientError
                 )
-                self.logger.info(f"✅ Async request successful with key {key[:8]}... Status: {response.status}")
+                self.logger.info(f"✅ Async request successful with key {key[:8]}... Status: {async_response_obj.status}")
                 # Save successful headers for this domain
                 if domain not in self.config.get("successful_headers", {}):
                     self.config.setdefault("successful_headers", {})[domain] = headers
                     self._save_config()
                     self.logger.info(f"Saved successful headers for domain: {domain}")
-                return response
+                return async_response_obj
             except aiohttp.ClientError as e:
                 self.logger.error(f"⚠️ All retries failed for key {key[:8]}...: {e}. Trying next key...")
                 # Continue to the next key in the outer loop
@@ -450,5 +453,4 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
     def __repr__(self):
         return f"<AsyncAPIKeyRotator keys={self.key_count} retries={self.max_retries}>"
-
 
