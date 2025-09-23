@@ -8,8 +8,15 @@ import logging
 import random
 import json
 from typing import List, Optional, Dict, Union, Callable, Awaitable, Tuple
+from unittest.mock import MagicMock
+from .key_parser import parse_keys
 from .exceptions import NoAPIKeysError, AllKeysExhaustedError
 from .utils import async_retry_with_backoff
+from .rotation_strategies import RotationStrategy, create_rotation_strategy, KeyMetrics
+from .metrics import RotatorMetrics
+from .middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
+from .error_classifier import ErrorClassifier, ErrorType
+from .config_loader import ConfigLoader
 
 try:
     from dotenv import load_dotenv
@@ -48,6 +55,8 @@ class BaseKeyRotator:
             logger: Optional[logging.Logger] = None,
             config_file: str = "rotator_config.json",
             load_env_file: bool = True,
+            error_classifier: Optional[ErrorClassifier] = None,
+            config_loader: Optional[ConfigLoader] = None,
     ):
         self.logger = logger if logger else _setup_default_logger()
 
@@ -57,7 +66,8 @@ class BaseKeyRotator:
         elif load_env_file and not _DOTENV_INSTALLED:
             self.logger.warning("python-dotenv is not installed. Cannot load .env file. Please install it with `pip install python-dotenv`.")
 
-        self.keys = self._parse_keys(api_keys, env_var)
+        self.keys = parse_keys(api_keys, env_var, self.logger)
+
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.timeout = timeout
@@ -70,25 +80,15 @@ class BaseKeyRotator:
         self.proxy_list = proxy_list if proxy_list else []
         self.current_proxy_index = 0
         self.config_file = config_file
-        self.config = self._load_config()
+        self.config_loader = config_loader if config_loader else ConfigLoader(config_file=config_file, logger=self.logger)
+        self.config = self.config_loader.load_config()
+        self.error_classifier = error_classifier if error_classifier else ErrorClassifier()
         self.logger.info(f"✅ Rotator инициализирован с {len(self.keys)} ключами. Max retries: {self.max_retries}, Base delay: {self.base_delay}s, Timeout: {self.timeout}s")
         if self.user_agents: self.logger.info(f"User-Agent rotation enabled with {len(self.user_agents)} agents.")
         if self.random_delay_range: self.logger.info(f"Random delay enabled: {self.random_delay_range[0]}s - {self.random_delay_range[1]}s.")
         if self.proxy_list: self.logger.info(f"Proxy rotation enabled with {len(self.proxy_list)} proxies.")
 
-    def _load_config(self) -> dict:
-        if os.path.exists(self.config_file):
-            with open(self.config_file, 'r') as f:
-                try:
-                    return json.load(f)
-                except json.JSONDecodeError:
-                    self.logger.warning(f"Could not decode JSON from {self.config_file}. Starting with empty config.")
-                    return {}
-        return {}
 
-    def _save_config(self):
-        with open(self.config_file, 'w') as f:
-            json.dump(self.config, f, indent=4)
 
     @staticmethod
     def _get_domain_from_url(url: str) -> str:
@@ -96,56 +96,7 @@ class BaseKeyRotator:
         parsed_url = urlparse(url)
         return parsed_url.netloc
 
-    def _parse_keys(self, api_keys, env_var) -> List[str]:
-        """Умный парсинг ключей из разных источников с понятными ошибками"""
-        if api_keys is not None:
-            if isinstance(api_keys, str):
-                keys = [k.strip() for k in api_keys.split(",") if k.strip()]
-            elif isinstance(api_keys, list):
-                keys = api_keys
-            else:
-                self.logger.error("❌ API keys must be a list or comma-separated string.")
-                raise NoAPIKeysError("❌ API keys must be a list or comma-separated string")
 
-            if not keys:
-                self.logger.error("❌ No API keys provided in the api_keys parameter.")
-                raise NoAPIKeysError("❌ No API keys provided in the api_keys parameter")
-
-            return keys
-
-        keys_str = os.getenv(env_var)
-
-        if keys_str is None:
-            error_msg = (
-                f"❌ No API keys found.\n"
-                f"   Please either:\n"
-                f"   1. Pass keys directly: APIKeyRotator(api_keys=[\"key1\", \"key2\"])\n"
-                f"   2. Set environment variable: export {env_var}=\'key1,key2\'\n"
-                f"   3. Create .env file with: {env_var}=key1,2\n"
-            )
-            self.logger.error(error_msg)
-            raise NoAPIKeysError(error_msg)
-
-        if not keys_str.strip():
-            error_msg = (
-                f"❌ Environment variable ${env_var} is empty.\n"
-                f"   Please set it with: export {env_var}=\'your_key1,your_key2\'"
-            )
-            self.logger.error(error_msg)
-            raise NoAPIKeysError(error_msg)
-
-        keys = [k.strip() for k in keys_str.split(",") if k.strip()]
-
-        if not keys:
-            error_msg = (
-                f"❌ No valid API keys found in ${env_var}.\n"
-                f"   Format should be: key1,key2,key3\n"
-                f"   Current value: \'{keys_str}\'"
-            )
-            self.logger.error(error_msg)
-            raise NoAPIKeysError(error_msg)
-
-        return keys
 
     def get_next_key(self) -> str:
         """Получить следующий ключ"""
@@ -178,10 +129,13 @@ class BaseKeyRotator:
         cookies = {}
 
         domain = self._get_domain_from_url(url)
+
+        # Apply saved headers for this domain if available
         if domain in self.config.get("successful_headers", {}):
             self.logger.debug(f"Applying saved headers for domain: {domain}")
             headers.update(self.config["successful_headers"][domain])
 
+        # Execute header_callback if provided
         if self.header_callback:
             self.logger.debug("Executing header_callback.")
             result = self.header_callback(key, custom_headers)
@@ -195,6 +149,7 @@ class BaseKeyRotator:
             else:
                 self.logger.warning("header_callback returned an unexpected type. Expected dict or (dict, dict).")
 
+        # Infer Authorization header if not explicitly set
         if "Authorization" not in headers and not any(h.lower() == "authorization" for h in headers.keys()):
             if key.startswith("sk-") or key.startswith("pk-"):  # OpenAI style
                 headers["Authorization"] = f"Bearer {key}"
@@ -206,6 +161,7 @@ class BaseKeyRotator:
                 headers["Authorization"] = f"Key {key}"
                 self.logger.debug(f"Inferred Authorization header (default): Key {key[:8]}...")
 
+        # Apply User-Agent rotation if enabled and not already set
         user_agent = self.get_next_user_agent()
         if user_agent and "User-Agent" not in headers and not any(h.lower() == "user-agent" for h in headers.keys()):
             headers["User-Agent"] = user_agent
@@ -255,13 +211,21 @@ class APIKeyRotator(BaseKeyRotator):
     ):
         super().__init__(api_keys, env_var, max_retries, base_delay, timeout, should_retry_callback, header_callback, user_agents, random_delay_range, proxy_list, logger, config_file, load_env_file)
         self.session = requests.Session()
-        self.logger.info(f"✅ Sync APIKeyRotator инициализирован с {len(self.keys)} ключами")
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=100,
+            pool_maxsize=100,
+            max_retries=0  # Retries are handled at the rotator level
+        )
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        self.logger.info(f"✅ Sync APIKeyRotator инициализирован с {len(self.keys)} ключами и Connection Pooling")
 
     def _should_retry(self, response: requests.Response) -> bool:
         """Определяет, нужно ли повторять запрос"""
         if self.should_retry_callback:
             return self.should_retry_callback(response)
-        return response.status_code in [429, 500, 502, 503, 504]
+        error_type = self.error_classifier.classify_error(response=response)
+        return error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]
 
     def request(
             self,
@@ -295,19 +259,35 @@ class APIKeyRotator(BaseKeyRotator):
                 response_obj = self.session.request(method, url, **kwargs)
                 self.logger.debug(f"Received response with status code: {response_obj.status_code}")
 
-                if not self._should_retry(response_obj):
+                error_type = self.error_classifier.classify_error(response=response_obj)
+
+                if error_type == ErrorType.PERMANENT:
+                    self.logger.error(f"❌ Key {key[:8]}... is permanently invalid (Status: {response_obj.status_code}). Removing from rotation.")
+                    self.keys.remove(key)
+                    if not self.keys:
+                        raise AllKeysExhaustedError("All keys are permanently invalid.")
+                    continue # Try next key immediately
+                elif error_type == ErrorType.RATE_LIMIT:
+                    self.logger.warning(f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... rate limited (Status: {response_obj.status_code}). Retrying with next key...")
+                elif error_type == ErrorType.TEMPORARY:
+                    self.logger.warning(f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... temporary error (Status: {response_obj.status_code}). Retrying...")
+                elif not self._should_retry(response_obj):
                     self.logger.info(f"✅ Request successful with key {key[:8]}... Status: {response_obj.status_code}")
                     # Save successful headers for this domain
                     if domain not in self.config.get("successful_headers", {}):
                         self.config.setdefault("successful_headers", {})[domain] = headers
-                        self._save_config()
+                        self.config_loader.save_config(self.config)
                         self.logger.info(f"Saved successful headers for domain: {domain}")
                     return response_obj
 
-                self.logger.warning(f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... rate limited or error: {response_obj.status_code}. Retrying...")
+                self.logger.warning(f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... unexpected error: {response_obj.status_code}. Retrying...")
 
             except requests.RequestException as e:
-                self.logger.error(f"⚠️ Network error with key {key[:8]}... on attempt {attempt + 1}/{self.max_retries}: {e}. Trying next key or retrying...")
+                error_type = self.error_classifier.classify_error(exception=e)
+                if error_type == ErrorType.NETWORK:
+                    self.logger.error(f"⚠️ Network error with key {key[:8]}... on attempt {attempt + 1}/{self.max_retries}: {e}. Trying next key or retrying...")
+                else:
+                    self.logger.error(f"⚠️ Unknown request exception with key {key[:8]}... on attempt {attempt + 1}/{self.max_retries}: {e}. Trying next key or retrying...")
 
             if attempt < self.max_retries - 1:
                 delay = self.base_delay * (2 ** attempt)
@@ -351,8 +331,10 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
             logger: Optional[logging.Logger] = None,
             config_file: str = "rotator_config.json",
             load_env_file: bool = True,
+            error_classifier: Optional[ErrorClassifier] = None,
+            config_loader: Optional[ConfigLoader] = None,
     ):
-        super().__init__(api_keys, env_var, max_retries, base_delay, timeout, should_retry_callback, header_callback, user_agents, random_delay_range, proxy_list, logger, config_file, load_env_file)
+        super().__init__(api_keys, env_var, max_retries, base_delay, timeout, should_retry_callback, header_callback, user_agents, random_delay_range, proxy_list, logger, config_file, load_env_file, error_classifier, config_loader=config_loader)
         self._session: Optional[aiohttp.ClientSession] = None
         self.logger.info(f"✅ Async APIKeyRotator инициализирован с {len(self.keys)} ключами")
 
@@ -377,7 +359,8 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
         """Определяет, нужно ли повторять запрос по статусу"""
         if self.should_retry_callback:
             return self.should_retry_callback(status)
-        return status in [429, 500, 502, 503, 504]
+        error_type = self.error_classifier.classify_error(response=MagicMock(status_code=status)) # Mock response for status code
+        return error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]
 
     async def request(
             self,
@@ -415,18 +398,35 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
             response_obj = await session.request(method, url, **request_kwargs)
             self.logger.debug(f"Received async response with status code: {response_obj.status}")
 
-            if self._should_retry(response_obj.status):
-                self.logger.warning(f"↻ Key {key[:8]}... returned status {response_obj.status}. Retrying with same key...")
-                await response_obj.release() # Release connection for retry
-                raise aiohttp.ClientError(f"Status {response_obj.status} indicates retry needed.")
+            error_type = self.error_classifier.classify_error(response=MagicMock(status_code=response_obj.status))
 
-            self.logger.info(f"✅ Async request successful with key {key[:8]}... Status: {response_obj.status}")
-            # Save successful headers for this domain
-            if domain not in self.config.get("successful_headers", {}):
-                self.config.setdefault("successful_headers", {})[domain] = headers
-                self._save_config()
-                self.logger.info(f"Saved successful headers for domain: {domain}")
-            return response_obj
+            if error_type == ErrorType.PERMANENT:
+                self.logger.error(f"❌ Key {key[:8]}... is permanently invalid (Status: {response_obj.status}). Removing from rotation.")
+                self.keys.remove(key)
+                await response_obj.release()
+                if not self.keys:
+                    raise AllKeysExhaustedError("All keys are permanently invalid.")
+                raise aiohttp.ClientError("Permanent key error, try next key.") # Raise to trigger retry with next key
+            elif error_type == ErrorType.RATE_LIMIT:
+                self.logger.warning(f"↻ Key {key[:8]}... rate limited (Status: {response_obj.status}). Retrying with next key...")
+                await response_obj.release()
+                raise aiohttp.ClientError("Rate limit hit, try next key.")
+            elif error_type == ErrorType.TEMPORARY:
+                self.logger.warning(f"↻ Key {key[:8]}... temporary error (Status: {response_obj.status}). Retrying...")
+                await response_obj.release()
+                raise aiohttp.ClientError("Temporary error, retry with same key.")
+            elif not self._should_retry(response_obj.status):
+                self.logger.info(f"✅ Async request successful with key {key[:8]}... Status: {response_obj.status}")
+                # Save successful headers for this domain
+                if domain not in self.config.get("successful_headers", {}):
+                    self.config.setdefault("successful_headers", {})[domain] = headers
+                    self.config_loader.save_config(self.config)
+                    self.logger.info(f"Saved successful headers for domain: {domain}")
+                return response_obj
+
+            self.logger.warning(f"↻ Key {key[:8]}... unexpected error: {response_obj.status}. Retrying...")
+            await response_obj.release()
+            raise aiohttp.ClientError("Unexpected error, retry.")
 
         # The async_retry_with_backoff will try all keys until success or exhaustion
         final_response = await async_retry_with_backoff(

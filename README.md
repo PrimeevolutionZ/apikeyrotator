@@ -26,8 +26,6 @@
 
 ```bash
 pip install apikeyrotator
-# To use the .env file loading feature, also install python-dotenv:
-pip install python-dotenv
 ```
 
 ## Getting Started: A Simple Example
@@ -41,7 +39,14 @@ from apikeyrotator import APIKeyRotator
 # Create a .env file with: API_KEYS="key1,key2,key3"
 
 # Initialize the rotator. It will automatically find your keys.
-rotator = APIKeyRotator()
+rotator = APIKeyRotator(
+    # You can optionally pass custom instances of ErrorClassifier and ConfigLoader
+    # error_classifier=MyCustomErrorClassifier(),
+    # config_loader=MyCustomConfigLoader(config_file="my_custom_config.json"),
+    # For this simple example, we'll let the rotator use its defaults.
+) # This is a comment to indicate that the default behavior is still simple.
+)
+
 
 try:
     # Use it just like the requests library!
@@ -95,7 +100,11 @@ rotator = APIKeyRotator(
     logger=logging.getLogger("MyRotator"), # Provide a custom logger instance.
     config_file="my_config.json",       # Custom path for the config file.
     load_env_file=True,                 # Set to False to disable .env loading.
+    # New parameters for modularity:
+    # error_classifier=ErrorClassifier(), # Use a custom error classifier
+    # config_loader=ConfigLoader(config_file="my_custom_config.json", logger=logging.getLogger("MyRotator")), # Use a custom config loader
 )
+
 
 try:
     response = rotator.get("https://api.example.com/data")
@@ -194,6 +203,8 @@ rotator = APIKeyRotator(api_keys=["my_key"], header_callback=dynamic_header_and_
 | `logger`               | `Optional[logging.Logger]`                 | `None`                   | A custom logger instance. If `None`, a default logger is created.                                                       |
 | `config_file`          | `str`                                      | `"rotator_config.json"`  | Path to the JSON file for storing learned header configurations.                                                        |
 | `load_env_file`        | `bool`                                     | `True`                   | If `True` and `python-dotenv` is installed, automatically loads variables from a `.env` file.                         |
+| `error_classifier`     | `Optional[ErrorClassifier]`                | `None`                   | Custom instance of `ErrorClassifier` for advanced error handling.                                                       |
+| `config_loader`        | `Optional[ConfigLoader]`                   | `None`                   | Custom instance of `ConfigLoader` for advanced configuration management.                                                |
 
 ## Error Handling
 
@@ -213,4 +224,50 @@ This library is designed with concurrency in mind.
 ## License
 
 This library is distributed under the MIT License. See the `LICENSE` file for more information.
+
+
+
+
+## What's New in Version 0.2.0
+
+This version introduces a significant overhaul, focusing on modularity, enhanced error handling, and greater flexibility. The core `APIKeyRotator` has been refactored to leverage new, dedicated modules for key parsing, error classification, rotation strategies, secret provisioning, and middleware. This not only improves maintainability but also allows for easier extension and customization of the library's behavior.
+
+### Enhanced Error Handling with `ErrorClassifier`
+
+One of the most significant improvements is the introduction of `ErrorClassifier`. Instead of relying solely on HTTP status codes, the rotator now uses a dedicated classification system to determine the nature of an error. This allows for more nuanced decision-making:
+
+*   **`RATE_LIMIT`**: Indicates that the request failed due to rate limiting. The rotator will typically switch to the next key immediately.
+*   **`TEMPORARY`**: Suggests a transient issue (e.g., 5xx server errors). The rotator will retry the request, potentially with the same key after a backoff period.
+*   **`PERMANENT`**: Signifies a persistent problem (e.g., 401 Unauthorized, 403 Forbidden). The key causing this error will be marked as invalid and removed from the rotation pool.
+*   **`NETWORK`**: Catches network-related exceptions (e.g., connection errors, timeouts), prompting a retry or key switch.
+
+This intelligent error classification minimizes unnecessary retries on permanently invalid keys and ensures that rate-limited keys are quickly bypassed, improving overall efficiency and resilience.
+
+### Connection Pooling for Synchronous Rotator
+
+The synchronous `APIKeyRotator` now explicitly configures `requests.Session` with connection pooling. This optimizes performance by reusing underlying TCP connections, reducing overhead for multiple requests to the same host. The `HTTPAdapter` is set up with `pool_connections=100` and `pool_maxsize=100`, ensuring efficient management of connections.
+
+### Updated API Reference
+
+Below is the updated API reference table reflecting the new parameters and capabilities.
+
+| Parameter              | Type                                       | Default                  | Description                                                                                             |
+| :--------------------- | :----------------------------------------- | :----------------------- | :------------------------------------------------------------------------------------------------------ |
+| `api_keys`             | `Optional[Union[List[str], str]]`          | `None`                   | A list of API keys or a single comma-separated string. If `None`, keys are loaded from `env_var`.                 |
+| `env_var`              | `str`                                      | `"API_KEYS"`             | The name of the environment variable to load keys from.                                                                 |
+| `max_retries`          | `int`                                      | `3`                      | Maximum number of retries for each key.                                                                                 |
+| `base_delay`           | `float`                                    | `1.0`                    | The base delay (in seconds) for exponential backoff. Delay is `base_delay * (2 ** attempt)`.                          |
+| `timeout`              | `float`                                    | `10.0`                   | Timeout for each HTTP request in seconds.                                                                               |
+| `should_retry_callback`| `Optional[Callable]`                       | `None`                   | A function that takes a response object and returns `True` if the request should be retried.                            |
+| `header_callback`      | `Optional[Callable]`                       | `None`                   | A function that takes an API key and returns a dictionary of headers, or a tuple of (headers, cookies).               |
+| `user_agents`          | `Optional[List[str]]`                      | `None`                   | A list of User-Agent strings to rotate through.                                                                         |
+| `random_delay_range`   | `Optional[Tuple[float, float]]`            | `None`                   | A tuple `(min, max)` specifying the range for a random delay before each request.                                       |
+| `proxy_list`           | `Optional[List[str]]`                      | `None`                   | A list of proxy URLs (e.g., `"http://user:pass@host:port"`) to rotate through.                                        |
+| `logger`               | `Optional[logging.Logger]`                 | `None`                   | A custom logger instance. If `None`, a default logger is created.                                                       |
+| `config_file`          | `str`                                      | `"rotator_config.json"`  | Custom path for the config file.                                                                                        |
+| `load_env_file`        | `bool`                                     | `True`                   | If `True` and `python-dotenv` is installed, automatically loads variables from a `.env` file.                         |
+| `error_classifier`     | `Optional[ErrorClassifier]`                | `None`                   | Custom instance of `ErrorClassifier` for advanced error handling.                                                       |
+| `config_loader`        | `Optional[ConfigLoader]`                   | `None`                   | Custom instance of `ConfigLoader` for advanced configuration management.                                                |
+
+
 

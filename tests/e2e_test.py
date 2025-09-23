@@ -17,20 +17,20 @@ except ImportError:
 def test_no_api_keys():
     """Тест ошибки при отсутствии API ключей"""
     with pytest.raises(NoAPIKeysError):
-        rotator = APIKeyRotator(api_keys=[], load_env_file=False)
+        rotator = APIKeyRotator(api_keys=[], load_env_file=False, error_classifier=MagicMock(), config_loader=MagicMock())
 
 
 def test_env_var_loading(monkeypatch):
     """Тест загрузки ключей из переменных окружения"""
     monkeypatch.setenv('API_KEYS', 'key1,key2,key3')
 
-    rotator = APIKeyRotator(load_env_file=False)
+    rotator = APIKeyRotator(load_env_file=False, error_classifier=MagicMock(), config_loader=MagicMock())
     assert rotator.keys == ['key1', 'key2', 'key3']  # Исправлено: keys вместо api_keys
 
 
 def test_key_rotation():
     """Тест ротации ключей"""
-    rotator = APIKeyRotator(api_keys=['key1', 'key2', 'key3'], load_env_file=False)
+    rotator = APIKeyRotator(api_keys=['key1', 'key2', 'key3'], load_env_file=False, error_classifier=MagicMock(), config_loader=MagicMock())
 
     # Первый запрос использует первый ключ
     with patch('requests.Session.send') as mock_send:
@@ -45,9 +45,11 @@ def test_key_rotation():
 def test_retry_on_failure():
     """Тест повторных попыток при ошибках"""
     rotator = APIKeyRotator(
-        api_keys=['key1'],
+        api_keys=["key1"],
         max_retries=3,  # Увеличим количество попыток
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock()
     )
 
     with patch('requests.Session.send') as mock_send:
@@ -75,7 +77,9 @@ def test_all_keys_exhausted():
     rotator = APIKeyRotator(
         api_keys=['key1', 'key2'],
         max_retries=1,
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock()
     )
 
     with patch('requests.Session.send') as mock_send:
@@ -97,7 +101,9 @@ def test_custom_retry_logic():
     rotator = APIKeyRotator(
         api_keys=['key1'],
         should_retry_callback=custom_retry,
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock()
     )
 
     with patch('requests.Session.send') as mock_send:
@@ -119,7 +125,9 @@ def test_header_callback():
     rotator = APIKeyRotator(
         api_keys=['test_key'],
         header_callback=header_callback,
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock()
     )
 
     with patch('requests.Session.send') as mock_send:
@@ -142,7 +150,9 @@ def test_config_persistence(tmp_path):
     rotator = APIKeyRotator(
         api_keys=['key1'],
         config_file=str(config_file),
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock(config_file=str(config_file), logger=MagicMock())
     )
 
     # Имитируем успешный запрос
@@ -165,9 +175,11 @@ def test_user_agent_rotation():
     ]
 
     rotator = APIKeyRotator(
-        api_keys=['key1'],
+        api_keys=["key1"],
         user_agents=user_agents,
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock()
     )
 
     with patch('requests.Session.send') as mock_send:
@@ -195,7 +207,9 @@ def test_delay_between_requests():
     rotator = APIKeyRotator(
         api_keys=['key1'],
         random_delay_range=(0.001, 0.002),  # Короткая задержка для тестов
-        load_env_file=False
+        load_env_file=False,
+        error_classifier=MagicMock(),
+        config_loader=MagicMock()
     )
 
     with patch('requests.Session.send') as mock_send, \
@@ -217,7 +231,9 @@ async def test_async_rotator():
     """Тест асинхронного ротатора"""
     async with AsyncAPIKeyRotator(
             api_keys=['key1', 'key2'],
-            load_env_file=False
+            load_env_file=False,
+            error_classifier=MagicMock(),
+            config_loader=MagicMock()
     ) as rotator:
         # Создаем мок для асинхронного ответа
         mock_response = AsyncMock()
@@ -234,7 +250,7 @@ async def test_async_rotator():
 # Простые тесты для проверки основных методов
 def test_http_methods():
     """Тест основных HTTP методов"""
-    rotator = APIKeyRotator(api_keys=['key1'], load_env_file=False)
+    rotator = APIKeyRotator(api_keys=['key1'], load_env_file=False, error_classifier=MagicMock(), config_loader=MagicMock())
 
     with patch('requests.Session.send') as mock_send:
         mock_response = Mock()
@@ -261,3 +277,76 @@ def test_http_methods():
 if __name__ == "__main__":
     # Запуск тестов
     pytest.main([__file__, "-v"])
+
+
+# Tests for ErrorClassifier
+from apikeyrotator.error_classifier import ErrorClassifier, ErrorType
+
+def test_error_classifier_rate_limit():
+    classifier = ErrorClassifier()
+    mock_response = MagicMock(status_code=429)
+    assert classifier.classify_error(response=mock_response) == ErrorType.RATE_LIMIT
+
+def test_error_classifier_temporary_error():
+    classifier = ErrorClassifier()
+    mock_response = MagicMock(status_code=503)
+    assert classifier.classify_error(response=mock_response) == ErrorType.TEMPORARY
+
+def test_error_classifier_permanent_error():
+    classifier = ErrorClassifier()
+    mock_response = MagicMock(status_code=401)
+    assert classifier.classify_error(response=mock_response) == ErrorType.PERMANENT
+    mock_response = MagicMock(status_code=403)
+    assert classifier.classify_error(response=mock_response) == ErrorType.PERMANENT
+    mock_response = MagicMock(status_code=400)
+    assert classifier.classify_error(response=mock_response) == ErrorType.PERMANENT
+
+def test_error_classifier_network_error():
+    classifier = ErrorClassifier()
+    assert classifier.classify_error(exception=requests.exceptions.ConnectionError()) == ErrorType.NETWORK
+    assert classifier.classify_error(exception=requests.exceptions.Timeout()) == ErrorType.NETWORK
+
+def test_error_classifier_unknown_error():
+    classifier = ErrorClassifier()
+    mock_response = MagicMock(status_code=200)
+    assert classifier.classify_error(response=mock_response) == ErrorType.UNKNOWN
+    assert classifier.classify_error(exception=ValueError("some other error")) == ErrorType.UNKNOWN
+
+
+
+
+
+# Tests for rotation_strategies
+from apikeyrotator.rotation_strategies import RoundRobinRotationStrategy, RandomRotationStrategy, WeightedRotationStrategy, create_rotation_strategy
+
+def test_round_robin_rotation_strategy():
+    strategy = RoundRobinRotationStrategy(['key1', 'key2', 'key3'])
+    assert strategy.get_next_key() == 'key1'
+    assert strategy.get_next_key() == 'key2'
+    assert strategy.get_next_key() == 'key3'
+    assert strategy.get_next_key() == 'key1'
+
+def test_random_rotation_strategy():
+    strategy = RandomRotationStrategy(['key1', 'key2', 'key3'])
+    keys = [strategy.get_next_key() for _ in range(10)]
+    assert all(key in ['key1', 'key2', 'key3'] for key in keys)
+
+def test_weighted_rotation_strategy():
+    strategy = WeightedRotationStrategy({'key1': 1, 'key2': 2})
+    keys = [strategy.get_next_key() for _ in range(30)]
+    key1_count = keys.count('key1')
+    key2_count = keys.count('key2')
+    # Check if the ratio is approximately 1:2
+    assert 0.4 < key2_count / (key1_count + key2_count) < 0.8
+
+def test_create_rotation_strategy():
+    strategy = create_rotation_strategy('round_robin', ['key1', 'key2'])
+    assert isinstance(strategy, RoundRobinRotationStrategy)
+    strategy = create_rotation_strategy('random', ['key1', 'key2'])
+    assert isinstance(strategy, RandomRotationStrategy)
+    strategy = create_rotation_strategy('weighted', {'key1': 1, 'key2': 2})
+    assert isinstance(strategy, WeightedRotationStrategy)
+    with pytest.raises(ValueError):
+        create_rotation_strategy('invalid', ['key1'])
+
+
