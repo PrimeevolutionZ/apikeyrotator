@@ -97,14 +97,14 @@ async def async_retry_with_backoff(
 
     Examples:
         >>> # Простой пример
-        >>> async def flaky_request():
+                  async def flaky_request():
         ...     async with aiohttp.ClientSession() as session:
         ...         async with session.get('https://api.example.com') as resp:
         ...             return await resp.json()
-        >>> response = await async_retry_with_backoff(flaky_request, retries=5)
+        ... response = await async_retry_with_backoff(flaky_request, retries=5)
 
-        >>> # С конкретными исключениями
-        >>> response = await async_retry_with_backoff(
+        ... # С конкретными исключениями
+        ... response = await async_retry_with_backoff( response = await async_retry_with_backoff(
         ...     lambda: session.get('https://api.example.com'),
         ...     retries=3,
         ...     exceptions=aiohttp.ClientError
@@ -325,7 +325,7 @@ def measure_time_async(func: Callable) -> Callable:
         ... async def slow_function():
         ...     await asyncio.sleep(1)
         ...     return "done"
-        >>> result = await slow_function()
+         result = await slow_function()
         ⏱️  slow_function took 1.00s
     """
 
