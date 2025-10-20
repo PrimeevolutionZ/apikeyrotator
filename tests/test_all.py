@@ -204,11 +204,14 @@ def test_all_keys_exhausted():
 
 @pytest.mark.skipif(not APIKEYROTATOR_AVAILABLE or not HAS_REQUESTS,
                     reason="apikeyrotator or requests not installed")
+@pytest.mark.skipif(not APIKEYROTATOR_AVAILABLE or not HAS_REQUESTS,
+                    reason="apikeyrotator or requests not installed")
 def test_custom_retry_logic():
     """Тест кастомной логики повторных попыток"""
 
     def custom_retry(response):
-        return response.status_code == 503
+        # Теперь возвращаем True для статуса 429 (чтобы ретраить), False для других
+        return response.status_code == 429
 
     rotator = APIKeyRotator(
         api_keys=['key1'],
@@ -223,8 +226,13 @@ def test_custom_retry_logic():
         mock_response.content = b''
         mock_request.return_value = mock_response
 
-        response = rotator.get('http://example.com')
-        assert mock_request.call_count == 1
+        # Теперь ожидаем, что запрос БУДЕТ ретраиться (т.к. кастомный callback вернет True для 429)
+        # и в итоге получим AllKeysExhaustedError после всех попыток
+        with pytest.raises(AllKeysExhaustedError):
+            rotator.get('http://example.com')
+
+        # Проверяем, что было несколько вызовов (ретрансмиссии)
+        assert mock_request.call_count > 1
 
 
 @pytest.mark.skipif(not APIKEYROTATOR_AVAILABLE or not HAS_REQUESTS,
