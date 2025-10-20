@@ -18,7 +18,7 @@ from .secret_providers import (
     AWSSecretsManagerProvider,
     create_secret_provider
 )
-from .metrics import RotatorMetrics, KeyStats, EndpointStats
+from .metrics import RotatorMetrics, EndpointStats  # Убираем KeyStats из экспорта
 from .middleware import (
     RotatorMiddleware,
     RequestInfo,
@@ -47,7 +47,7 @@ __all__ = [
     # Rotation strategies
     'RotationStrategy',
     'create_rotation_strategy',
-    'KeyMetrics',
+    'KeyMetrics',  # Теперь это единственный класс метрик ключей
     'BaseRotationStrategy',
     'RoundRobinRotationStrategy',
     'RandomRotationStrategy',
@@ -64,7 +64,6 @@ __all__ = [
 
     # Metrics
     'RotatorMetrics',
-    'KeyStats',
     'EndpointStats',
 
     # Middleware

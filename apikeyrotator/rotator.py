@@ -15,9 +15,10 @@ from .rotation_strategies import (
     RotationStrategy,
     create_rotation_strategy,
     BaseRotationStrategy,
-    RoundRobinRotationStrategy
+    RoundRobinRotationStrategy,
+    KeyMetrics  # Теперь импортируем KeyMetrics
 )
-from .metrics import RotatorMetrics, KeyStats  # Импортируем KeyStats вместо KeyMetrics
+from .metrics import RotatorMetrics  # Убираем KeyStats из импорта
 from .middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
 from .error_classifier import ErrorClassifier, ErrorType
 from .config_loader import ConfigLoader
@@ -25,7 +26,6 @@ from .secret_providers import SecretProvider
 
 try:
     from dotenv import load_dotenv
-
     _DOTENV_INSTALLED = True
 except ImportError:
     _DOTENV_INSTALLED = False
@@ -46,13 +46,6 @@ def _setup_default_logger():
 class BaseKeyRotator:
     """
     Базовый класс для общей логики ротации ключей.
-
-    Предоставляет основные функции для управления API ключами, включая:
-    - Загрузку ключей из различных источников
-    - Ротацию ключей с различными стратегиями
-    - Отслеживание метрик и здоровья ключей
-    - Поддержку middleware для расширяемости
-    - Управление прокси и User-Agent
     """
 
     def __init__(
@@ -78,31 +71,6 @@ class BaseKeyRotator:
             secret_provider: Optional[SecretProvider] = None,
             enable_metrics: bool = True,
     ):
-        """
-        Инициализирует ротатор ключей.
-
-        Args:
-            api_keys: Список ключей или строка с разделителями-запятыми
-            env_var: Имя переменной окружения для загрузки ключей
-            max_retries: Максимальное количество попыток
-            base_delay: Базовая задержка для экспоненциального backoff
-            timeout: Таймаут запроса в секундах
-            should_retry_callback: Кастомная функция определения необходимости retry
-            header_callback: Кастомная функция для формирования заголовков
-            user_agents: Список User-Agent для ротации
-            random_delay_range: Диапазон случайной задержки (min, max)
-            proxy_list: Список прокси для ротации
-            logger: Кастомный логгер
-            config_file: Путь к файлу конфигурации
-            load_env_file: Загружать ли .env файл
-            error_classifier: Классификатор ошибок
-            config_loader: Загрузчик конфигурации
-            rotation_strategy: Стратегия ротации ключей
-            rotation_strategy_kwargs: Параметры для стратегии ротации
-            middlewares: Список middleware для обработки запросов
-            secret_provider: Провайдер секретов для получения ключей
-            enable_metrics: Включить сбор метрик
-        """
         self.logger = logger if logger else _setup_default_logger()
 
         if load_env_file and _DOTENV_INSTALLED:
@@ -145,8 +113,9 @@ class BaseKeyRotator:
         # Инициализация метрик
         self.enable_metrics = enable_metrics
         self.metrics = RotatorMetrics() if enable_metrics else None
-        self._key_metrics: Dict[str, KeyStats] = {  # Изменено на KeyStats
-            key: KeyStats() for key in self.keys  # Создаем KeyStats вместо KeyMetrics
+        # Теперь используем KeyMetrics вместо KeyStats
+        self._key_metrics: Dict[str, KeyMetrics] = {
+            key: KeyMetrics(key) for key in self.keys
         }
 
         self.logger.info(
@@ -185,11 +154,8 @@ class BaseKeyRotator:
     def get_next_key(self) -> str:
         """
         Получить следующий ключ согласно стратегии ротации.
-
-        Returns:
-            str: Следующий API ключ
         """
-        # Передаем словарь KeyStats вместо KeyMetrics
+        # Теперь передаем правильный тип KeyMetrics
         key = self.rotation_strategy.get_next_key(self._key_metrics)
         self.logger.debug(f"Selected key: {key[:8]}...")
         return key
@@ -220,14 +186,6 @@ class BaseKeyRotator:
     ) -> Tuple[dict, dict]:
         """
         Подготавливает заголовки и куки с авторизацией и ротацией User-Agent.
-
-        Args:
-            key: API ключ
-            custom_headers: Пользовательские заголовки
-            url: URL запроса
-
-        Returns:
-            Tuple[dict, dict]: Заголовки и куки
         """
         headers = custom_headers.copy() if custom_headers else {}
         cookies = {}
@@ -280,12 +238,18 @@ class BaseKeyRotator:
             self.logger.info(f"⏳ Applying random delay of {delay:.2f} seconds.")
             time.sleep(delay)
 
+    def _update_key_metrics(self, key: str, success: bool, response_time: float, is_rate_limited: bool = False):
+        """Обновляет метрики ключа"""
+        if key in self._key_metrics:
+            self._key_metrics[key].update_from_request(
+                success=success,
+                response_time=response_time,
+                is_rate_limited=is_rate_limited
+            )
+
     def reset_key_health(self, key: Optional[str] = None):
         """
         Сбрасывает статус здоровья ключа/ключей.
-
-        Args:
-            key: Конкретный ключ для сброса. Если None, сбрасывает все ключи.
         """
         if key:
             if key in self._key_metrics:
@@ -303,9 +267,6 @@ class BaseKeyRotator:
     def get_key_statistics(self) -> Dict[str, Dict]:
         """
         Получить статистику по всем ключам.
-
-        Returns:
-            Dict: Словарь со статистикой каждого ключа
         """
         return {
             key: metrics.to_dict()
@@ -315,9 +276,6 @@ class BaseKeyRotator:
     def get_metrics(self) -> Optional[Dict]:
         """
         Получить общие метрики ротатора.
-
-        Returns:
-            Optional[Dict]: Метрики или None если метрики отключены
         """
         if self.metrics:
             return self.metrics.get_metrics()
@@ -326,9 +284,6 @@ class BaseKeyRotator:
     def export_config(self) -> Dict:
         """
         Экспортировать текущую конфигурацию.
-
-        Returns:
-            Dict: Текущая конфигурация
         """
         return {
             "keys_count": len(self.keys),
@@ -354,7 +309,8 @@ class BaseKeyRotator:
             new_keys = await self.secret_provider.refresh_keys()
             if new_keys:
                 self.keys = new_keys
-                self._key_metrics = {key: KeyStats() for key in self.keys}  # Изменено на KeyStats
+                # Теперь используем KeyMetrics
+                self._key_metrics = {key: KeyMetrics(key) for key in self.keys}
                 self._init_rotation_strategy(self.rotation_strategy)
                 self.logger.info(f"Refreshed {len(new_keys)} keys from secret provider")
         except Exception as e:
@@ -375,7 +331,6 @@ class BaseKeyRotator:
 class APIKeyRotator(BaseKeyRotator):
     """
     Супер-простой в использовании, но мощный ротатор API ключей (СИНХРОННЫЙ).
-    Автоматически обрабатывает лимиты, ошибки и ретраи.
     """
 
     def __init__(self, *args, **kwargs):
@@ -419,17 +374,6 @@ class APIKeyRotator(BaseKeyRotator):
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
         """
         Выполняет запрос. Просто как requests, но с ротацией ключей!
-
-        Args:
-            method: HTTP метод
-            url: URL запроса
-            **kwargs: Дополнительные параметры для requests
-
-        Returns:
-            requests.Response: Ответ сервера
-
-        Raises:
-            AllKeysExhaustedError: Если все ключи исчерпаны
         """
         self.logger.info(f"Initiating {method} request to {url} with key rotation.")
 
@@ -499,7 +443,9 @@ class APIKeyRotator(BaseKeyRotator):
                     )
 
                 # Обновление метрик ключа
-                self._key_metrics[key].last_used = time.time()
+                is_rate_limited = (error_type == ErrorType.RATE_LIMIT)
+                success = (error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT])
+                self._update_key_metrics(key, success, request_time, is_rate_limited)
 
                 if error_type == ErrorType.PERMANENT:
                     self.logger.error(
@@ -511,7 +457,6 @@ class APIKeyRotator(BaseKeyRotator):
                         raise AllKeysExhaustedError("All keys are permanently invalid.")
                     continue
                 elif error_type == ErrorType.RATE_LIMIT:
-                    self._key_metrics[key].rate_limit_hits += 1
                     self.logger.warning(
                         f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:8]}... rate limited. Retrying with next key...")
                 elif error_type == ErrorType.TEMPORARY:
@@ -540,6 +485,10 @@ class APIKeyRotator(BaseKeyRotator):
                     if handled:
                         self.logger.info(f"Error handled by middleware")
                         continue
+
+                # Обновление метрик ключа при ошибке
+                request_time = time.time() - start_time
+                self._update_key_metrics(key, False, request_time)
 
                 if error_type == ErrorType.NETWORK:
                     self.logger.error(
@@ -576,7 +525,6 @@ class APIKeyRotator(BaseKeyRotator):
 class AsyncAPIKeyRotator(BaseKeyRotator):
     """
     Супер-простой в использовании, но мощный ротатор API ключей (АСИНХРОННЫЙ).
-    Автоматически обрабатывает лимиты, ошибки и ретраи.
     """
 
     def __init__(self, *args, **kwargs):
@@ -610,14 +558,6 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
     async def request(self, method: str, url: str, **kwargs) -> aiohttp.ClientResponse:
         """
         Выполняет асинхронный запрос. Просто как aiohttp, но с ротацией ключей!
-
-        Args:
-            method: HTTP метод
-            url: URL запроса
-            **kwargs: Дополнительные параметры для aiohttp
-
-        Returns:
-            aiohttp.ClientResponse: Ответ сервера
         """
         self.logger.info(f"Initiating async {method} request to {url} with key rotation.")
         session = await self._get_session()
@@ -688,7 +628,9 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                 )
 
             # Обновление метрик ключа
-            self._key_metrics[key].last_used = time.time()
+            is_rate_limited = (error_type == ErrorType.RATE_LIMIT)
+            success = (error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT])
+            self._update_key_metrics(key, success, request_time, is_rate_limited)
 
             if error_type == ErrorType.PERMANENT:
                 self.logger.error(
@@ -701,7 +643,6 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                     raise AllKeysExhaustedError("All keys are permanently invalid.")
                 raise aiohttp.ClientError("Permanent key error, try next key.")
             elif error_type == ErrorType.RATE_LIMIT:
-                self._key_metrics[key].rate_limit_hits += 1
                 self.logger.warning(
                     f"↻ Key {key[:8]}... rate limited (Status: {response_obj.status}). Retrying with next key...")
                 await response_obj.release()

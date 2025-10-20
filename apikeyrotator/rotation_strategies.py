@@ -17,37 +17,88 @@ class RotationStrategy(Enum):
 class KeyMetrics:
     def __init__(self, key: str):
         self.key = key
-        self.success_rate = 1.0
+        self.total_requests = 0
+        self.successful_requests = 0
+        self.failed_requests = 0
         self.avg_response_time = 0.0
         self.last_used = 0.0
+        self.last_success = 0.0
+        self.last_failure = 0.0
+        self.consecutive_failures = 0
+        self.rate_limit_hits = 0
+        self.is_healthy = True
+        # Дополнительные поля для совместимости
+        self.success_rate = 1.0
         self.rate_limit_reset = 0.0
         self.requests_remaining = float('inf')
-        self.consecutive_failures = 0
-        self.is_healthy = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "key": self.key,
-            "success_rate": self.success_rate,
+            "total_requests": self.total_requests,
+            "successful_requests": self.successful_requests,
+            "failed_requests": self.failed_requests,
             "avg_response_time": self.avg_response_time,
             "last_used": self.last_used,
+            "last_success": self.last_success,
+            "last_failure": self.last_failure,
+            "consecutive_failures": self.consecutive_failures,
+            "rate_limit_hits": self.rate_limit_hits,
+            "is_healthy": self.is_healthy,
+            # Совместимость со старым форматом
+            "success_rate": self.success_rate,
             "rate_limit_reset": self.rate_limit_reset,
             "requests_remaining": self.requests_remaining,
-            "consecutive_failures": self.consecutive_failures,
-            "is_healthy": self.is_healthy,
         }
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> 'KeyMetrics':
         metrics = KeyMetrics(data["key"])
-        metrics.success_rate = data.get("success_rate", 1.0)
+        metrics.total_requests = data.get("total_requests", 0)
+        metrics.successful_requests = data.get("successful_requests", 0)
+        metrics.failed_requests = data.get("failed_requests", 0)
         metrics.avg_response_time = data.get("avg_response_time", 0.0)
         metrics.last_used = data.get("last_used", 0.0)
+        metrics.last_success = data.get("last_success", 0.0)
+        metrics.last_failure = data.get("last_failure", 0.0)
+        metrics.consecutive_failures = data.get("consecutive_failures", 0)
+        metrics.rate_limit_hits = data.get("rate_limit_hits", 0)
+        metrics.is_healthy = data.get("is_healthy", True)
+        # Совместимость со старым форматом
+        metrics.success_rate = data.get("success_rate", 1.0)
         metrics.rate_limit_reset = data.get("rate_limit_reset", 0.0)
         metrics.requests_remaining = data.get("requests_remaining", float('inf'))
-        metrics.consecutive_failures = data.get("consecutive_failures", 0)
-        metrics.is_healthy = data.get("is_healthy", True)
         return metrics
+
+    def update_from_request(self, success: bool, response_time: float = 0.0, **kwargs):
+        """Обновляет метрики на основе результата запроса"""
+        self.total_requests += 1
+        self.last_used = time.time()
+
+        if success:
+            self.successful_requests += 1
+            self.last_success = time.time()
+            self.consecutive_failures = 0
+            self.success_rate = (self.success_rate * 0.9) + (1.0 * 0.1)
+        else:
+            self.failed_requests += 1
+            self.last_failure = time.time()
+            self.consecutive_failures += 1
+            self.success_rate = (self.success_rate * 0.9) + (0.0 * 0.1)
+
+        # Обновляем среднее время ответа
+        if self.total_requests > 0:
+            self.avg_response_time = (
+                                             self.avg_response_time * (self.total_requests - 1) + response_time
+                                     ) / self.total_requests
+
+        # Дополнительные параметры
+        if 'rate_limit_reset' in kwargs:
+            self.rate_limit_reset = kwargs['rate_limit_reset']
+        if 'requests_remaining' in kwargs:
+            self.requests_remaining = kwargs['requests_remaining']
+        if kwargs.get('is_rate_limited', False):
+            self.rate_limit_hits += 1
 
 
 class BaseRotationStrategy:
@@ -110,7 +161,8 @@ class LRURotationStrategy(BaseRotationStrategy):
     def get_next_key(self, current_key_metrics: Optional[Dict[str, KeyMetrics]] = None) -> str:
         if current_key_metrics:
             for key, metrics in current_key_metrics.items():
-                self._key_metrics[key] = metrics
+                if key in self._key_metrics:
+                    self._key_metrics[key] = metrics
 
         # Находим ключ с наименьшим last_used
         lru_key = min(self._key_metrics.items(), key=lambda x: x[1].last_used)
@@ -130,7 +182,8 @@ class HealthBasedStrategy(BaseRotationStrategy):
     def get_next_key(self, current_key_metrics: Optional[Dict[str, KeyMetrics]] = None) -> str:
         if current_key_metrics:
             for key, metrics in current_key_metrics.items():
-                self._key_metrics[key] = metrics
+                if key in self._key_metrics:
+                    self._key_metrics[key] = metrics
 
         healthy_keys = [
             k for k, metrics in self._key_metrics.items()
@@ -154,23 +207,11 @@ class HealthBasedStrategy(BaseRotationStrategy):
         if not metrics:
             return
 
-        if success:
-            metrics.consecutive_failures = 0
-            metrics.is_healthy = True
-            metrics.success_rate = (metrics.success_rate * 0.9) + (1.0 * 0.1)
-        else:
-            metrics.consecutive_failures += 1
-            if metrics.consecutive_failures >= self.failure_threshold:
-                metrics.is_healthy = False
-            metrics.success_rate = (metrics.success_rate * 0.9) + (0.0 * 0.1)
+        metrics.update_from_request(success, response_time, **kwargs)
 
-        metrics.avg_response_time = (metrics.avg_response_time * 0.9) + (response_time * 0.1)
-        metrics.last_used = time.time()
-
-        if 'rate_limit_reset' in kwargs:
-            metrics.rate_limit_reset = kwargs['rate_limit_reset']
-        if 'requests_remaining' in kwargs:
-            metrics.requests_remaining = kwargs['requests_remaining']
+        # Дополнительная логика здоровья
+        if not success and metrics.consecutive_failures >= self.failure_threshold:
+            metrics.is_healthy = False
 
 
 # Старые имена для обратной совместимости
