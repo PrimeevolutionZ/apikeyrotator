@@ -30,7 +30,7 @@ from .middleware import (
 from .error_classifier import ErrorClassifier, ErrorType
 from .config_loader import ConfigLoader
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __author__ = "Prime Evolution"
 __email__ = "develop@eclps-team.ru"
 
