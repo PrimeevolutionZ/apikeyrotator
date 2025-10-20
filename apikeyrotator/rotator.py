@@ -14,11 +14,10 @@ from .utils import async_retry_with_backoff
 from .rotation_strategies import (
     RotationStrategy,
     create_rotation_strategy,
-    KeyMetrics,
     BaseRotationStrategy,
     RoundRobinRotationStrategy
 )
-from .metrics import RotatorMetrics
+from .metrics import RotatorMetrics, KeyStats  # Импортируем KeyStats вместо KeyMetrics
 from .middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
 from .error_classifier import ErrorClassifier, ErrorType
 from .config_loader import ConfigLoader
@@ -146,8 +145,8 @@ class BaseKeyRotator:
         # Инициализация метрик
         self.enable_metrics = enable_metrics
         self.metrics = RotatorMetrics() if enable_metrics else None
-        self._key_metrics: Dict[str, KeyMetrics] = {
-            key: KeyMetrics(key) for key in self.keys
+        self._key_metrics: Dict[str, KeyStats] = {  # Изменено на KeyStats
+            key: KeyStats() for key in self.keys  # Создаем KeyStats вместо KeyMetrics
         }
 
         self.logger.info(
@@ -190,6 +189,7 @@ class BaseKeyRotator:
         Returns:
             str: Следующий API ключ
         """
+        # Передаем словарь KeyStats вместо KeyMetrics
         key = self.rotation_strategy.get_next_key(self._key_metrics)
         self.logger.debug(f"Selected key: {key[:8]}...")
         return key
@@ -354,7 +354,7 @@ class BaseKeyRotator:
             new_keys = await self.secret_provider.refresh_keys()
             if new_keys:
                 self.keys = new_keys
-                self._key_metrics = {key: KeyMetrics(key) for key in self.keys}
+                self._key_metrics = {key: KeyStats() for key in self.keys}  # Изменено на KeyStats
                 self._init_rotation_strategy(self.rotation_strategy)
                 self.logger.info(f"Refreshed {len(new_keys)} keys from secret provider")
         except Exception as e:
