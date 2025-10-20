@@ -133,11 +133,9 @@ async def main():
         max_retries=3
     ) as rotator:
         try:
-            # Correct usage: await the rotator.get(url) call before async with
-            async with await rotator.get("https://api.example.com/async_data") as response:
-                response.raise_for_status()
-                data = await response.json()
-                print(f"Async Success: {response.status}", data)
+            response = await rotator.get("https://api.example.com/async_data")
+            data = await response.json()
+            print(f"Async Success: {response.status}", data)
 
         except Exception as e:
             print(f"An async error occurred: {e}")
@@ -224,13 +222,6 @@ This library is designed with concurrency in mind.
 ## License
 
 This library is distributed under the MIT License. See the `LICENSE` file for more information.
-
-
-
-
-## What's New in Version 0.2.0
-
-This version introduces a significant overhaul, focusing on modularity, enhanced error handling, and greater flexibility. The core `APIKeyRotator` has been refactored to leverage new, dedicated modules for key parsing, error classification, rotation strategies, secret provisioning, and middleware. This not only improves maintainability but also allows for easier extension and customization of the library's behavior.
 
 ### Enhanced Error Handling with `ErrorClassifier`
 
