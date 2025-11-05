@@ -30,7 +30,7 @@ from .middleware import (
 from .error_classifier import ErrorClassifier, ErrorType
 from .config_loader import ConfigLoader
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 __author__ = "Prime Evolution"
 __email__ = "develop@eclps-team.ru"
 
@@ -47,7 +47,7 @@ __all__ = [
     # Rotation strategies
     'RotationStrategy',
     'create_rotation_strategy',
-    'KeyMetrics',  # Теперь это единственный класс метрик ключей
+    'KeyMetrics',
     'BaseRotationStrategy',
     'RoundRobinRotationStrategy',
     'RandomRotationStrategy',

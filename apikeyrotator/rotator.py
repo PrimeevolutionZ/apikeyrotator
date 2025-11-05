@@ -16,7 +16,7 @@ from .rotation_strategies import (
     create_rotation_strategy,
     BaseRotationStrategy,
     RoundRobinRotationStrategy,
-    KeyMetrics  # Теперь импортируем KeyMetrics
+    KeyMetrics
 )
 from .metrics import RotatorMetrics  # Убираем KeyStats из импорта
 from .middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo

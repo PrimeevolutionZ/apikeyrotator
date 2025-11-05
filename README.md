@@ -1,5 +1,8 @@
 # APIKeyRotator
 
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
 **A powerful, simple, and resilient API key rotator for Python.**
 
 `APIKeyRotator` is a Python library designed to make your API interactions more robust. It seamlessly handles API key rotation, automatically manages rate limits, retries on errors, and can even mimic human-like behavior to avoid bot detection. With both synchronous and asynchronous support, it's a drop-in enhancement for your `requests` or `aiohttp` based projects.
