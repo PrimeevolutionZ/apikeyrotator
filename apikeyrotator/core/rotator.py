@@ -9,17 +9,17 @@ from unittest.mock import MagicMock
 from .key_parser import parse_keys
 from .exceptions import AllKeysExhaustedError
 from apikeyrotator.utils import async_retry_with_backoff
-from apikeyrotator.strategies.rotation_strategies import (
+from apikeyrotator.strategies import (
     RotationStrategy,
     create_rotation_strategy,
     BaseRotationStrategy,
     KeyMetrics
 )
-from apikeyrotator.metrics import RotatorMetrics  # Убираем KeyStats из импорта
+from apikeyrotator.metrics import RotatorMetrics
 from apikeyrotator.middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
-from .error_classifier import ErrorClassifier, ErrorType
+from apikeyrotator.utils import ErrorClassifier, ErrorType
 from .config_loader import ConfigLoader
-from apikeyrotator.secret_providers import SecretProvider
+from apikeyrotator.providers import SecretProvider
 
 try:
     from dotenv import load_dotenv
