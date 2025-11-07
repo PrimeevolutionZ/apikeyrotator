@@ -23,7 +23,7 @@ try:
         AllKeysExhaustedError
     )
     from apikeyrotator.error_classifier import ErrorClassifier, ErrorType
-    from apikeyrotator.rotation_strategies import (
+    from apikeyrotator.strategies.rotation_strategies import (
         RoundRobinRotationStrategy,
         RandomRotationStrategy,
         WeightedRotationStrategy,

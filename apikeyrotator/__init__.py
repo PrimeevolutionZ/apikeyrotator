@@ -1,81 +1,126 @@
-from .rotator import APIKeyRotator, AsyncAPIKeyRotator
-from .exceptions import APIKeyError, NoAPIKeysError, AllKeysExhaustedError
-from .rotation_strategies import (
+"""
+API Key Rotator - мощная библиотека для ротации API ключей
+
+Простой в использовании, но feature-rich ротатор API ключей с поддержкой:
+- Множественных стратегий ротации
+- Провайдеров секретов (AWS, GCP, файлы, env)
+- Middleware системы
+- Метрик и мониторинга
+- Автоматического retry и обработки ошибок
+"""
+
+# Core
+from .core import (
+    APIKeyRotator,
+    AsyncAPIKeyRotator,
+    APIKeyError,
+    NoAPIKeysError,
+    AllKeysExhaustedError,
+    parse_keys,
+    ConfigLoader,
+)
+
+# Strategies
+from .strategies import (
     RotationStrategy,
     create_rotation_strategy,
-    KeyMetrics,
+    BaseRotationStrategy,
     RoundRobinRotationStrategy,
     RandomRotationStrategy,
     WeightedRotationStrategy,
     LRURotationStrategy,
     HealthBasedStrategy,
-    BaseRotationStrategy
+    KeyMetrics,
 )
-from .secret_providers import (
+
+# Providers
+from .providers import (
     SecretProvider,
+    create_secret_provider,
     EnvironmentSecretProvider,
     FileSecretProvider,
     AWSSecretsManagerProvider,
-    create_secret_provider
 )
-from .metrics import RotatorMetrics, EndpointStats  # Убираем KeyStats из экспорта
+
+# Middleware
 from .middleware import (
     RotatorMiddleware,
     RequestInfo,
     ResponseInfo,
     ErrorInfo,
+    LoggingMiddleware,
+    CachingMiddleware,
     RateLimitMiddleware,
-    CachingMiddleware
+    RetryMiddleware,
 )
-from .error_classifier import ErrorClassifier, ErrorType
-from .config_loader import ConfigLoader
 
-__version__ = "0.4.0"
+# Metrics
+from .metrics import (
+    RotatorMetrics,
+    KeyStats,
+    EndpointStats,
+    PrometheusExporter,
+)
+
+# Utils
+from .utils import (
+    ErrorClassifier,
+    ErrorType,
+    retry_with_backoff,
+    async_retry_with_backoff,
+)
+
+__version__ = "0.5.0"
 __author__ = "Prime Evolution"
 __email__ = "develop@eclps-team.ru"
 
 __all__ = [
-    # Core classes
-    'APIKeyRotator',
-    'AsyncAPIKeyRotator',
+    # Core
+    "APIKeyRotator",
+    "AsyncAPIKeyRotator",
+    "APIKeyError",
+    "NoAPIKeysError",
+    "AllKeysExhaustedError",
+    "parse_keys",
+    "ConfigLoader",
 
-    # Exceptions
-    'APIKeyError',
-    'NoAPIKeysError',
-    'AllKeysExhaustedError',
+    # Strategies
+    "RotationStrategy",
+    "create_rotation_strategy",
+    "BaseRotationStrategy",
+    "RoundRobinRotationStrategy",
+    "RandomRotationStrategy",
+    "WeightedRotationStrategy",
+    "LRURotationStrategy",
+    "HealthBasedStrategy",
+    "KeyMetrics",
 
-    # Rotation strategies
-    'RotationStrategy',
-    'create_rotation_strategy',
-    'KeyMetrics',
-    'BaseRotationStrategy',
-    'RoundRobinRotationStrategy',
-    'RandomRotationStrategy',
-    'WeightedRotationStrategy',
-    'LRURotationStrategy',
-    'HealthBasedStrategy',
-
-    # Secret providers
-    'SecretProvider',
-    'EnvironmentSecretProvider',
-    'FileSecretProvider',
-    'AWSSecretsManagerProvider',
-    'create_secret_provider',
-
-    # Metrics
-    'RotatorMetrics',
-    'EndpointStats',
+    # Providers
+    "SecretProvider",
+    "create_secret_provider",
+    "EnvironmentSecretProvider",
+    "FileSecretProvider",
+    "AWSSecretsManagerProvider",
 
     # Middleware
-    'RotatorMiddleware',
-    'RequestInfo',
-    'ResponseInfo',
-    'ErrorInfo',
-    'RateLimitMiddleware',
-    'CachingMiddleware',
+    "RotatorMiddleware",
+    "RequestInfo",
+    "ResponseInfo",
+    "ErrorInfo",
+    "LoggingMiddleware",
+    "CachingMiddleware",
+    "RateLimitMiddleware",
+    "RetryMiddleware",
 
-    # Utilities
-    'ErrorClassifier',
-    'ErrorType',
-    'ConfigLoader',
+    # Metrics
+    "RotatorMetrics",
+    "KeyStats",
+    "EndpointStats",
+    "PrometheusExporter",
+
+    # Utils
+    "ErrorClassifier",
+    "ErrorType",
+    "retry_with_backoff",
+    "async_retry_with_backoff",
 ]

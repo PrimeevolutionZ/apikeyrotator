@@ -1,28 +1,25 @@
-import os
 import time
 import requests
 import asyncio
 import aiohttp
 import logging
 import random
-import json
-from typing import List, Optional, Dict, Union, Callable, Awaitable, Tuple
+from typing import List, Optional, Dict, Union, Callable, Tuple
 from unittest.mock import MagicMock
 from .key_parser import parse_keys
-from .exceptions import NoAPIKeysError, AllKeysExhaustedError
-from .utils import async_retry_with_backoff
-from .rotation_strategies import (
+from .exceptions import AllKeysExhaustedError
+from apikeyrotator.utils import async_retry_with_backoff
+from apikeyrotator.strategies.rotation_strategies import (
     RotationStrategy,
     create_rotation_strategy,
     BaseRotationStrategy,
-    RoundRobinRotationStrategy,
     KeyMetrics
 )
-from .metrics import RotatorMetrics  # Убираем KeyStats из импорта
-from .middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
+from apikeyrotator.metrics import RotatorMetrics  # Убираем KeyStats из импорта
+from apikeyrotator.middleware import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
 from .error_classifier import ErrorClassifier, ErrorType
 from .config_loader import ConfigLoader
-from .secret_providers import SecretProvider
+from apikeyrotator.secret_providers import SecretProvider
 
 try:
     from dotenv import load_dotenv
