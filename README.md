@@ -3,9 +3,21 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
+
 **A powerful, simple, and resilient API key rotator for Python.**
 
 `APIKeyRotator` is a Python library designed to make your API interactions more robust. It seamlessly handles API key rotation, automatically manages rate limits, retries on errors, and can even mimic human-like behavior to avoid bot detection. With both synchronous and asynchronous support, it's a drop-in enhancement for your `requests` or `aiohttp` based projects.
+
+## 📚 Documentation
+
+**[→ Full Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/INDEX.md)**
+
+- [Getting Started Guide](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/GETTING_STARTED.md) - Installation and basic usage
+- [API Reference](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/API_REFERENCE.md) - Complete API documentation
+- [Examples](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/EXAMPLES.md) - Real-world code examples
+- [Advanced Usage](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ADVANCED_USAGE.md) - Power features and customization
+- [Error Handling](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ERROR_HANDLING.md) - Comprehensive error management
+- [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/FAQ.md) - Frequently asked questions
 
 ## Key Features
 
@@ -31,9 +43,25 @@
 pip install apikeyrotator
 ```
 
-## Getting Started: A Simple Example
+### Optional Dependencies
 
-The library is designed to be incredibly simple to use. Here’s a basic example:
+```bash
+# For synchronous requests (recommended)
+pip install requests
+
+# For asynchronous requests
+pip install aiohttp
+
+# For environment variable management
+pip install python-dotenv
+
+# Install all optional dependencies
+pip install apikeyrotator[all]
+```
+
+## Quick Start
+
+### Simple Example
 
 ```python
 from apikeyrotator import APIKeyRotator
@@ -42,14 +70,7 @@ from apikeyrotator import APIKeyRotator
 # Create a .env file with: API_KEYS="key1,key2,key3"
 
 # Initialize the rotator. It will automatically find your keys.
-rotator = APIKeyRotator(
-    # You can optionally pass custom instances of ErrorClassifier and ConfigLoader
-    # error_classifier=MyCustomErrorClassifier(),
-    # config_loader=MyCustomConfigLoader(config_file="my_custom_config.json"),
-    # For this simple example, we'll let the rotator use its defaults.
-) # This is a comment to indicate that the default behavior is still simple.
-)
-
+rotator = APIKeyRotator()
 
 try:
     # Use it just like the requests library!
@@ -61,13 +82,7 @@ except Exception as e:
     print(f"An error occurred: {e}")
 ```
 
-## Advanced Usage & Configuration
-
-Unlock the full power of `APIKeyRotator` by customizing its behavior.
-
-### Full Configuration
-
-Here is an example demonstrating all the major configuration options for the synchronous `APIKeyRotator`.
+### With Configuration
 
 ```python
 import logging
@@ -82,32 +97,19 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
 ]
 
-# A list of proxies to rotate through (optional).
-PROXY_LIST = ["http://user:pass@proxy1.com:8080", "http://user:pass@proxy2.com:8080"]
-
 rotator = APIKeyRotator(
     # Provide keys directly or load from environment variables.
-    api_keys=["key_sync_1", "key_sync_2"],
-
-    # --- Retry & Timeout Settings ---
-    max_retries=5,          # Max retries per key before giving up.
-    base_delay=0.5,         # Base delay in seconds for exponential backoff.
-    timeout=15.0,           # Request timeout in seconds.
-
-    # --- Anti-Bot Evasion ---
-    user_agents=USER_AGENTS,            # List of User-Agents to rotate.
-    random_delay_range=(1.0, 3.0),      # Random delay between 1 and 3 seconds before each request.
-    proxy_list=PROXY_LIST,              # List of proxies for IP rotation.
-
-    # --- Advanced Customization ---
-    logger=logging.getLogger("MyRotator"), # Provide a custom logger instance.
-    config_file="my_config.json",       # Custom path for the config file.
-    load_env_file=True,                 # Set to False to disable .env loading.
-    # New parameters for modularity:
-    # error_classifier=ErrorClassifier(), # Use a custom error classifier
-    # config_loader=ConfigLoader(config_file="my_custom_config.json", logger=logging.getLogger("MyRotator")), # Use a custom config loader
+    api_keys=["key_1", "key_2", "key_3"],
+    
+    # Retry & Timeout Settings
+    max_retries=5,
+    base_delay=1.0,
+    timeout=15.0,
+    
+    # Anti-Bot Evasion
+    user_agents=USER_AGENTS,
+    random_delay_range=(1.0, 3.0),
 )
-
 
 try:
     response = rotator.get("https://api.example.com/data")
@@ -120,11 +122,7 @@ except Exception as e:
     print(f"An unexpected error occurred: {e}")
 ```
 
-### Asynchronous Mode (`AsyncAPIKeyRotator`)
-
-The asynchronous version, `AsyncAPIKeyRotator`, works seamlessly with `asyncio` and has a similar API to `aiohttp`.
-
-**Important Note on Usage:** When using `AsyncAPIKeyRotator` methods (like `get`, `post`, etc.) with `async with`, you must `await` the method call itself, as it returns a coroutine that resolves to an `aiohttp.ClientResponse` object, which is the actual asynchronous context manager.
+### Asynchronous Usage
 
 ```python
 import asyncio
@@ -147,86 +145,160 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### Custom Callbacks for Maximum Flexibility
+## Core Concepts
 
-You can inject your own logic for handling retries and generating headers/cookies.
+### Automatic Key Rotation
 
-#### `should_retry_callback`
+APIKeyRotator automatically switches between your API keys when:
+- A rate limit is encountered (HTTP 429)
+- An authentication error occurs (HTTP 401/403)
+- Network errors happen
+- After maximum retries on the current key
 
-Define custom conditions for when a request should be retried.
+### Smart Retry Logic
+
+Failed requests are automatically retried with exponential backoff:
+- Delay formula: `base_delay * (2 ** attempt)`
+- Configurable maximum retries per key
+- Intelligent error classification
+
+### Intelligent Header Detection
+
+The library automatically detects and uses the correct authorization header format:
+- Bearer tokens (for JWT-like keys)
+- API keys in various header formats
+- Custom headers via callbacks
+- Learned configurations are persisted
+
+## Use Cases
+
+### Rate Limit Management
+```python
+rotator = APIKeyRotator(
+    api_keys=["key1", "key2", "key3"],
+    max_retries=5,
+    base_delay=2.0
+)
+
+# Make many requests without worrying about rate limits
+for item_id in range(1000):
+    response = rotator.get(f"https://api.example.com/items/{item_id}")
+```
+
+### Web Scraping
+```python
+rotator = APIKeyRotator(
+    api_keys=["key1", "key2"],
+    user_agents=[...],
+    random_delay_range=(1.0, 3.0),
+    proxy_list=["http://proxy1.com:8080", "http://proxy2.com:8080"]
+)
+```
+
+### High-Volume Data Collection
+```python
+async with AsyncAPIKeyRotator(api_keys=["key1", "key2", "key3"]) as rotator:
+    tasks = [rotator.get(url) for url in urls]
+    responses = await asyncio.gather(*tasks)
+```
+
+## Configuration Options
+
+| Parameter               | Type                  | Default      | Description                               |
+|-------------------------|-----------------------|--------------|-------------------------------------------|
+| `api_keys`              | `List[str]` or `str`  | `None`       | API keys (comma-separated string or list) |
+| `env_var`               | `str`                 | `"API_KEYS"` | Environment variable name for keys        |
+| `max_retries`           | `int`                 | `3`          | Maximum retry attempts per key            |
+| `base_delay`            | `float`               | `1.0`        | Base delay for exponential backoff        |
+| `timeout`               | `float`               | `10.0`       | Request timeout in seconds                |
+| `user_agents`           | `List[str]`           | `None`       | List of User-Agent strings to rotate      |
+| `random_delay_range`    | `Tuple[float, float]` | `None`       | Random delay range (min, max)             |
+| `proxy_list`            | `List[str]`           | `None`       | List of proxy URLs                        |
+| `should_retry_callback` | `Callable`            | `None`       | Custom retry logic function               |
+| `header_callback`       | `Callable`            | `None`       | Custom header generation function         |
+| `error_classifier`      | `ErrorClassifier`     | `None`       | Custom error classifier                   |
+
+[→ See full API reference](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/API_REFERENCE.md)
+
+## Error Handling
 
 ```python
-import requests
+from apikeyrotator import (
+    APIKeyRotator,
+    NoAPIKeysError,
+    AllKeysExhaustedError
+)
 
-def custom_retry_logic(response: requests.Response) -> bool:
-    # Retry on 429 (Too Many Requests) or if the response body contains 'error'.
+try:
+    rotator = APIKeyRotator(api_keys=["key1", "key2"])
+    response = rotator.get("https://api.example.com/data")
+    
+except NoAPIKeysError:
+    print("No API keys were provided or found")
+    
+except AllKeysExhaustedError:
+    print("All keys failed after maximum retries")
+    
+except Exception as e:
+    print(f"Unexpected error: {e}")
+```
+
+[→ Learn more about error handling](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ERROR_HANDLING.md)
+
+## Advanced Features
+
+### Custom Error Classification
+
+```python
+from apikeyrotator import ErrorClassifier, ErrorType
+
+class CustomErrorClassifier(ErrorClassifier):
+    def classify_error(self, response=None, exception=None) -> ErrorType:
+        if response and response.status_code == 420:
+            return ErrorType.RATE_LIMIT
+        return super().classify_error(response, exception)
+
+rotator = APIKeyRotator(
+    api_keys=["key1", "key2"],
+    error_classifier=CustomErrorClassifier()
+)
+```
+
+### Custom Retry Logic
+
+```python
+def custom_retry(response):
     if response.status_code == 429:
         return True
     try:
         return 'error' in response.json().get('status', '')
-    except requests.exceptions.JSONDecodeError:
+    except:
         return False
 
-rotator = APIKeyRotator(api_keys=["my_key"], should_retry_callback=custom_retry_logic)
+rotator = APIKeyRotator(
+    api_keys=["key1"],
+    should_retry_callback=custom_retry
+)
 ```
 
-#### `header_callback`
-
-Dynamically generate headers and cookies, perfect for handling complex authentication.
+### Dynamic Headers
 
 ```python
-from typing import Tuple, Optional, Dict
+def header_callback(key, existing_headers):
+    return {
+        "Authorization": f"Bearer {key}",
+        "X-Client-Version": "2.0"
+    }, {"session": "token"}
 
-def dynamic_header_and_cookie_generator(key: str, existing_headers: Optional[Dict]) -> Tuple[Dict, Dict]:
-    headers = {"X-Custom-Auth": f"Token {key}"}
-    cookies = {"session_id": "some_session_value_from_a_previous_login"}
-    return headers, cookies
-
-rotator = APIKeyRotator(api_keys=["my_key"], header_callback=dynamic_header_and_cookie_generator)
+rotator = APIKeyRotator(
+    api_keys=["key1"],
+    header_callback=header_callback
+)
 ```
 
-## API Reference
+[→ Explore advanced usage](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ADVANCED_USAGE.md)
 
-### `APIKeyRotator` and `AsyncAPIKeyRotator` Parameters
-
-| Parameter              | Type                                       | Default                  | Description                                                                                             |
-| ---------------------- | ------------------------------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `api_keys`             | `Optional[Union[List[str], str]]`          | `None`                   | A list of API keys or a single comma-separated string. If `None`, keys are loaded from `env_var`.                 |
-| `env_var`              | `str`                                      | `"API_KEYS"`             | The name of the environment variable to load keys from.                                                                 |
-| `max_retries`          | `int`                                      | `3`                      | Maximum number of retries for each key.                                                                                 |
-| `base_delay`           | `float`                                    | `1.0`                    | The base delay (in seconds) for exponential backoff. Delay is `base_delay * (2 ** attempt)`.                          |
-| `timeout`              | `float`                                    | `10.0`                   | Timeout for each HTTP request in seconds.                                                                               |
-| `should_retry_callback`| `Optional[Callable]`                       | `None`                   | A function that takes a response object and returns `True` if the request should be retried.                            |
-| `header_callback`      | `Optional[Callable]`                       | `None`                   | A function that takes an API key and returns a dictionary of headers, or a tuple of (headers, cookies).               |
-| `user_agents`          | `Optional[List[str]]`                      | `None`                   | A list of User-Agent strings to rotate through.                                                                         |
-| `random_delay_range`   | `Optional[Tuple[float, float]]`            | `None`                   | A tuple `(min, max)` specifying the range for a random delay before each request.                                       |
-| `proxy_list`           | `Optional[List[str]]`                      | `None`                   | A list of proxy URLs (e.g., `"http://user:pass@host:port"`) to rotate through.                                        |
-| `logger`               | `Optional[logging.Logger]`                 | `None`                   | A custom logger instance. If `None`, a default logger is created.                                                       |
-| `config_file`          | `str`                                      | `"rotator_config.json"`  | Path to the JSON file for storing learned header configurations.                                                        |
-| `load_env_file`        | `bool`                                     | `True`                   | If `True` and `python-dotenv` is installed, automatically loads variables from a `.env` file.                         |
-| `error_classifier`     | `Optional[ErrorClassifier]`                | `None`                   | Custom instance of `ErrorClassifier` for advanced error handling.                                                       |
-| `config_loader`        | `Optional[ConfigLoader]`                   | `None`                   | Custom instance of `ConfigLoader` for advanced configuration management.                                                |
-
-## Error Handling
-
-The library defines custom exceptions to help you gracefully handle failures:
-
-*   `NoAPIKeysError`: Raised if no API keys are provided or found in the environment.
-*   `AllKeysExhaustedError`: Raised when a request has failed with every available API key after all retries.
-
-## Multithreading and Concurrency
-
-This library is designed with concurrency in mind.
-
-*   **Concurrency (`asyncio`):** The `AsyncAPIKeyRotator` is the recommended choice for I/O-bound tasks (like making many network requests). It leverages `asyncio` to handle thousands of concurrent requests efficiently without blocking.
-
-*   **Multithreading:** While you can use the synchronous `APIKeyRotator` in a multithreaded application, be aware of Python's Global Interpreter Lock (GIL). For most API-related tasks, `asyncio` provides superior performance. If you need to use threads, it's safe to create a separate `APIKeyRotator` instance per thread.
-
-## License
-
-This library is distributed under the MIT License. See the `LICENSE` file for more information.
-
-### Enhanced Error Handling with `ErrorClassifier`
+## Enhanced Error Handling with `ErrorClassifier`
 
 One of the most significant improvements is the introduction of `ErrorClassifier`. Instead of relying solely on HTTP status codes, the rotator now uses a dedicated classification system to determine the nature of an error. This allows for more nuanced decision-making:
 
@@ -237,31 +309,86 @@ One of the most significant improvements is the introduction of `ErrorClassifier
 
 This intelligent error classification minimizes unnecessary retries on permanently invalid keys and ensures that rate-limited keys are quickly bypassed, improving overall efficiency and resilience.
 
-### Connection Pooling for Synchronous Rotator
+## Performance
 
-The synchronous `APIKeyRotator` now explicitly configures `requests.Session` with connection pooling. This optimizes performance by reusing underlying TCP connections, reducing overhead for multiple requests to the same host. The `HTTPAdapter` is set up with `pool_connections=100` and `pool_maxsize=100`, ensuring efficient management of connections.
+### Connection Pooling
 
-### Updated API Reference
+The synchronous `APIKeyRotator` uses connection pooling for optimal performance:
+- Reuses TCP connections
+- Configured with `pool_connections=100` and `pool_maxsize=100`
+- Reduces overhead for multiple requests
 
-Below is the updated API reference table reflecting the new parameters and capabilities.
+### Concurrency
 
-| Parameter              | Type                                       | Default                  | Description                                                                                             |
-| :--------------------- | :----------------------------------------- | :----------------------- | :------------------------------------------------------------------------------------------------------ |
-| `api_keys`             | `Optional[Union[List[str], str]]`          | `None`                   | A list of API keys or a single comma-separated string. If `None`, keys are loaded from `env_var`.                 |
-| `env_var`              | `str`                                      | `"API_KEYS"`             | The name of the environment variable to load keys from.                                                                 |
-| `max_retries`          | `int`                                      | `3`                      | Maximum number of retries for each key.                                                                                 |
-| `base_delay`           | `float`                                    | `1.0`                    | The base delay (in seconds) for exponential backoff. Delay is `base_delay * (2 ** attempt)`.                          |
-| `timeout`              | `float`                                    | `10.0`                   | Timeout for each HTTP request in seconds.                                                                               |
-| `should_retry_callback`| `Optional[Callable]`                       | `None`                   | A function that takes a response object and returns `True` if the request should be retried.                            |
-| `header_callback`      | `Optional[Callable]`                       | `None`                   | A function that takes an API key and returns a dictionary of headers, or a tuple of (headers, cookies).               |
-| `user_agents`          | `Optional[List[str]]`                      | `None`                   | A list of User-Agent strings to rotate through.                                                                         |
-| `random_delay_range`   | `Optional[Tuple[float, float]]`            | `None`                   | A tuple `(min, max)` specifying the range for a random delay before each request.                                       |
-| `proxy_list`           | `Optional[List[str]]`                      | `None`                   | A list of proxy URLs (e.g., `"http://user:pass@host:port"`) to rotate through.                                        |
-| `logger`               | `Optional[logging.Logger]`                 | `None`                   | A custom logger instance. If `None`, a default logger is created.                                                       |
-| `config_file`          | `str`                                      | `"rotator_config.json"`  | Custom path for the config file.                                                                                        |
-| `load_env_file`        | `bool`                                     | `True`                   | If `True` and `python-dotenv` is installed, automatically loads variables from a `.env` file.                         |
-| `error_classifier`     | `Optional[ErrorClassifier]`                | `None`                   | Custom instance of `ErrorClassifier` for advanced error handling.                                                       |
-| `config_loader`        | `Optional[ConfigLoader]`                   | `None`                   | Custom instance of `ConfigLoader` for advanced configuration management.                                                |
+For maximum performance with many requests:
 
+```python
+# Async for I/O-bound tasks
+async with AsyncAPIKeyRotator(api_keys=["key1", "key2"]) as rotator:
+    tasks = [rotator.get(url) for url in urls]
+    responses = await asyncio.gather(*tasks)
 
+# Result: 100x faster for 100 concurrent requests
+```
 
+## Multithreading and Concurrency
+
+*   **Concurrency (`asyncio`):** The `AsyncAPIKeyRotator` is the recommended choice for I/O-bound tasks (like making many network requests). It leverages `asyncio` to handle thousands of concurrent requests efficiently without blocking.
+
+*   **Multithreading:** While you can use the synchronous `APIKeyRotator` in a multithreaded application, be aware of Python's Global Interpreter Lock (GIL). For most API-related tasks, `asyncio` provides superior performance. If you need to use threads, it's safe to create a separate `APIKeyRotator` instance per thread.
+
+## Examples
+
+Check out the [examples directory](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/EXAMPLES.md) for more use cases:
+
+- Web scraping with anti-bot features
+- Data collection from multiple endpoints
+- REST and GraphQL API integration
+- Production-ready patterns with monitoring
+- Batch processing with progress tracking
+
+## Testing
+
+Run the test suite:
+
+```bash
+# Install test dependencies
+pip install pytest pytest-asyncio requests-mock aioresponses
+
+# Run tests
+pytest test_all.py -v
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## License
+
+This library is distributed under the MIT License. See the `LICENSE` file for more information.
+
+## Links
+
+- **GitHub:** [github.com/PrimeevolutionZ/apikeyrotator](https://github.com/PrimeevolutionZ/apikeyrotator)
+- **PyPI:** [pypi.org/project/apikeyrotator](https://pypi.org/project/apikeyrotator/)
+- **Documentation:** [Full Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/INDEX.md)
+- **Issues:** [GitHub Issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
+
+## Support
+
+If you encounter any issues or have questions:
+
+1. Check the [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/FAQ.md)
+2. Search [existing issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
+3. Read the [documentation](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/INDEX.md)
+4. Open a [new issue](https://github.com/PrimeevolutionZ/apikeyrotator/issues/new) with details
+
+---
+
+**Made with ❤️ by [Eclips Team](https://github.com/PrimeevolutionZ)**
