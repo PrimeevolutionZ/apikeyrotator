@@ -2,7 +2,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
 **A powerful, simple, and resilient API key rotator for Python.**
 
@@ -10,14 +10,14 @@
 
 ## 📚 Documentation
 
-**[→ Full Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/INDEX.md)**
+**[→ Full Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docsINDEX.md)**
 
-- [Getting Started Guide](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/GETTING_STARTED.md) - Installation and basic usage
-- [API Reference](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/API_REFERENCE.md) - Complete API documentation
-- [Examples](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/EXAMPLES.md) - Real-world code examples
-- [Advanced Usage](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ADVANCED_USAGE.md) - Power features and customization
-- [Error Handling](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ERROR_HANDLING.md) - Comprehensive error management
-- [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/FAQ.md) - Frequently asked questions
+- [Getting Started Guide](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/GETTING_STARTED.md) - Installation and basic usage
+- [API Reference](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/API_REFERENCE.md) - Complete API documentation
+- [Examples](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/EXAMPLES.md) - Real-world code examples
+- [Advanced Usage](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ADVANCED_USAGE.md) - Power features and customization
+- [Error Handling](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ERROR_HANDLING.md) - Comprehensive error management
+- [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/FAQ.md) - Frequently asked questions
 
 ## Key Features
 
@@ -218,7 +218,7 @@ async with AsyncAPIKeyRotator(api_keys=["key1", "key2", "key3"]) as rotator:
 | `header_callback`       | `Callable`            | `None`       | Custom header generation function         |
 | `error_classifier`      | `ErrorClassifier`     | `None`       | Custom error classifier                   |
 
-[→ See full API reference](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/API_REFERENCE.md)
+[→ See full API reference](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/API_REFERENCE.md)
 
 ## Error Handling
 
@@ -243,7 +243,7 @@ except Exception as e:
     print(f"Unexpected error: {e}")
 ```
 
-[→ Learn more about error handling](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ERROR_HANDLING.md)
+[→ Learn more about error handling](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ERROR_HANDLING.md)
 
 ## Advanced Features
 
@@ -296,7 +296,7 @@ rotator = APIKeyRotator(
 )
 ```
 
-[→ Explore advanced usage](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/ADVANCED_USAGE.md)
+[→ Explore advanced usage](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ADVANCED_USAGE.md)
 
 ## Enhanced Error Handling with `ErrorClassifier`
 
@@ -339,7 +339,7 @@ async with AsyncAPIKeyRotator(api_keys=["key1", "key2"]) as rotator:
 
 ## Examples
 
-Check out the [examples directory](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/EXAMPLES.md) for more use cases:
+Check out the [examples directory](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/EXAMPLES.md) for more use cases:
 
 - Web scraping with anti-bot features
 - Data collection from multiple endpoints
@@ -377,16 +377,16 @@ This library is distributed under the MIT License. See the `LICENSE` file for mo
 
 - **GitHub:** [github.com/PrimeevolutionZ/apikeyrotator](https://github.com/PrimeevolutionZ/apikeyrotator)
 - **PyPI:** [pypi.org/project/apikeyrotator](https://pypi.org/project/apikeyrotator/)
-- **Documentation:** [Full Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/INDEX.md)
+- **Documentation:** [Full Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/INDEX.md)
 - **Issues:** [GitHub Issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
 
 ## Support
 
 If you encounter any issues or have questions:
 
-1. Check the [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/FAQ.md)
+1. Check the [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/FAQ.md)
 2. Search [existing issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
-3. Read the [documentation](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/apikeyrotator/docs/INDEX.md)
+3. Read the [documentation](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/INDEX.md)
 4. Open a [new issue](https://github.com/PrimeevolutionZ/apikeyrotator/issues/new) with details
 
 ---
