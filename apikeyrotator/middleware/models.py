@@ -1,10 +1,10 @@
-"""Модели данных для middleware"""
+"""Data models for middleware"""
 
 from typing import Any, Dict, Optional
 
 
 class RequestInfo:
-    """Информация о HTTP запросе"""
+    """Information about an HTTP request"""
 
     def __init__(
             self,
@@ -26,7 +26,7 @@ class RequestInfo:
 
 
 class ResponseInfo:
-    """Информация о HTTP ответе"""
+    """Information about an HTTP response"""
 
     def __init__(
             self,
@@ -42,7 +42,7 @@ class ResponseInfo:
 
 
 class ErrorInfo:
-    """Информация об ошибке"""
+    """Information about an error"""
 
     def __init__(
             self,

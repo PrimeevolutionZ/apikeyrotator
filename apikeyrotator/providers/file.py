@@ -1,4 +1,4 @@
-"""Провайдер секретов из файла"""
+"""Secret provider from file"""
 
 import os
 import json
@@ -7,12 +7,12 @@ from typing import List
 
 class FileSecretProvider:
     """
-    Провайдер секретов из файла.
+    Secret provider from file.
 
-    Поддерживает форматы:
-    - JSON массив: ["key1", "key2", "key3"]
+    Supports formats:
+    - JSON array: ["key1", "key2", "key3"]
     - CSV: key1,key2,key3
-    - Построчно (по одному ключу на строку)
+    - One key per line
     """
 
     def __init__(self, file_path: str):
@@ -26,7 +26,7 @@ class FileSecretProvider:
             with open(self.file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Попытка парсинга как JSON
+            # Try parsing as JSON
             try:
                 keys = json.loads(content)
                 if isinstance(keys, list):
@@ -34,7 +34,7 @@ class FileSecretProvider:
             except json.JSONDecodeError:
                 pass
 
-            # Парсинг как CSV или построчно
+            # Parse as CSV or line-by-line
             if ',' in content:
                 return [k.strip() for k in content.split(",") if k.strip()]
             else:

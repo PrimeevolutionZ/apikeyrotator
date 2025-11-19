@@ -1,10 +1,10 @@
-"""Модели данных для метрик"""
+"""Data models for metrics"""
 
 from typing import Dict, Any
 
 
 class KeyStats:
-    """Статистика для одного API ключа"""
+    """Statistics for a single API key"""
 
     def __init__(self):
         self.total_requests = 0
@@ -42,7 +42,7 @@ class KeyStats:
 
 
 class EndpointStats:
-    """Статистика для endpoint"""
+    """Statistics for an endpoint"""
 
     def __init__(self):
         self.total_requests = 0

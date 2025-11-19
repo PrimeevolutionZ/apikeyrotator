@@ -1,4 +1,4 @@
-"""Провайдер секретов из AWS Secrets Manager"""
+"""Secret provider for AWS Secrets Manager"""
 
 import json
 from typing import List
@@ -6,15 +6,15 @@ from typing import List
 
 class AWSSecretsManagerProvider:
     """
-    Провайдер секретов из AWS Secrets Manager.
+    Secret provider from AWS Secrets Manager.
 
-    Требует установки: pip install boto3
+    Requires: pip install boto3
 
-    Секрет может быть в форматах:
-    - JSON массив: ["key1", "key2"]
-    - JSON объект: {"keys": ["key1", "key2"]} или {"api_keys": ["key1", "key2"]}
-    - JSON строка: "key1,key2,key3"
-    - Простая строка: key1,key2,key3
+    Secret can be in formats:
+    - JSON array: ["key1", "key2"]
+    - JSON object: {"keys": ["key1", "key2"]} or {"api_keys": ["key1", "key2"]}
+    - JSON string: "key1,key2,key3"
+    - Plain string: key1,key2,key3
     """
 
     def __init__(self, secret_name: str, region_name: str = 'us-east-1'):
@@ -23,7 +23,7 @@ class AWSSecretsManagerProvider:
         self._client = None
 
     def _get_client(self):
-        """Создает или возвращает boto3 клиент"""
+        """Creates or returns boto3 client"""
         try:
             import boto3
         except ImportError:
@@ -48,14 +48,14 @@ class AWSSecretsManagerProvider:
             if 'SecretString' in response:
                 secret = response['SecretString']
 
-                # Попытка парсинга как JSON
+                # Try parsing as JSON
                 try:
                     keys_data = json.loads(secret)
 
                     if isinstance(keys_data, list):
                         return [str(k).strip() for k in keys_data if str(k).strip()]
                     elif isinstance(keys_data, dict):
-                        # Извлекаем из ключей 'keys' или 'api_keys'
+                        # Extract from 'keys' or 'api_keys'
                         keys_list = keys_data.get('keys') or keys_data.get('api_keys')
 
                         if keys_list is None:
@@ -69,7 +69,7 @@ class AWSSecretsManagerProvider:
                         return [k.strip() for k in keys_data.split(',') if k.strip()]
 
                 except json.JSONDecodeError:
-                    # Не JSON - парсим как CSV
+                    # Not JSON - parse as CSV
                     return [k.strip() for k in secret.split(',') if k.strip()]
 
             return []

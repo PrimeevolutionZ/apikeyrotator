@@ -1,4 +1,4 @@
-"""Провайдер секретов из Google Cloud Secret Manager"""
+"""Secret provider from Google Cloud Secret Manager"""
 
 import json
 from typing import List
@@ -6,9 +6,9 @@ from typing import List
 
 class GCPSecretManagerProvider:
     """
-    Провайдер секретов из GCP Secret Manager.
+    Secret provider from GCP Secret Manager.
 
-    Требует установки: pip install google-cloud-secret-manager
+    Requires: pip install google-cloud-secret-manager
     """
 
     def __init__(self, project_id: str, secret_id: str, version_id: str = "latest"):
@@ -18,7 +18,7 @@ class GCPSecretManagerProvider:
         self._client = None
 
     async def _get_client(self):
-        """Создает или возвращает GCP клиент"""
+        """Creates or returns GCP client"""
         try:
             from google.cloud import secretmanager
         except ImportError:
@@ -39,7 +39,7 @@ class GCPSecretManagerProvider:
             response = client.access_secret_version(request={"name": name})
             secret_string = response.payload.data.decode('UTF-8')
 
-            # Парсинг аналогично AWS
+            # Parsing similar to AWS
             try:
                 keys_data = json.loads(secret_string)
                 if isinstance(keys_data, list):

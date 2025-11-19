@@ -7,24 +7,24 @@ import logging
 
 class ConfigLoader:
     """
-    Загрузчик конфигурации из файлов JSON/YAML.
+    Configuration loader from JSON/YAML files.
 
-    Поддерживает загрузку, сохранение и обновление конфигурации
-    с автоматическим определением формата файла по расширению.
+    Supports loading, saving and updating configuration
+    with automatic file format detection by extension.
 
     Attributes:
-        config_file (str): Путь к файлу конфигурации
-        logger (Optional[logging.Logger]): Логгер для отладки
-        config (Dict[str, Any]): Загруженная конфигурация
+        config_file (str): Path to the configuration file
+        logger (Optional[logging.Logger]): Logger for debugging
+        config (Dict[str, Any]): Loaded configuration
     """
 
     def __init__(self, config_file: str, logger: Optional[logging.Logger] = None):
         """
-        Инициализирует загрузчик конфигурации.
+        Initializes the configuration loader.
 
         Args:
-            config_file: Путь к файлу конфигурации (.json, .yaml, .yml)
-            logger: Опциональный логгер для вывода сообщений
+            config_file: Path to the configuration file (.json, .yaml, .yml)
+            logger: Optional logger for output messages
         """
         self.config_file = config_file
         self.logger = logger
@@ -32,16 +32,16 @@ class ConfigLoader:
 
     def load_config(self) -> Dict[str, Any]:
         """
-        Загружает конфигурацию из файла.
+        Loads configuration from file.
 
-        Автоматически определяет формат файла по расширению.
-        Если файл не существует, возвращает пустой словарь.
+        Automatically detects file format by extension.
+        If the file does not exist, returns an empty dictionary.
 
         Returns:
-            Dict[str, Any]: Загруженная конфигурация
+            Dict[str, Any]: Loaded configuration
 
         Raises:
-            ValueError: Если формат файла не поддерживается
+            ValueError: If the file format is not supported
         """
         if not os.path.exists(self.config_file):
             if self.logger:
@@ -70,26 +70,26 @@ class ConfigLoader:
 
     def get(self, key: str, default: Any = None) -> Any:
         """
-        Получает значение из конфигурации по ключу.
+        Gets a value from the configuration by key.
 
         Args:
-            key: Ключ для поиска
-            default: Значение по умолчанию, если ключ не найден
+            key: Key to search for
+            default: Default value if the key is not found
 
         Returns:
-            Any: Значение из конфигурации или default
+            Any: Value from configuration or default
         """
         return self.config.get(key, default)
 
     def save_config(self, config: Optional[Dict[str, Any]] = None):
         """
-        Сохраняет конфигурацию в файл.
+        Saves the configuration to a file.
 
         Args:
-            config: Конфигурация для сохранения. Если None, сохраняет self.config
+            config: Configuration to save. If None, saves self.config
 
         Raises:
-            ValueError: Если формат файла не поддерживается
+            ValueError: If the file format is not supported
         """
         if config is not None:
             self.config = config
@@ -98,7 +98,7 @@ class ConfigLoader:
         ext = ext.lower()
 
         try:
-            # Создаем директорию если не существует
+            # Create directory if it does not exist
             os.makedirs(os.path.dirname(self.config_file) or '.', exist_ok=True)
 
             with open(self.config_file, 'w', encoding='utf-8') as f:
@@ -118,10 +118,10 @@ class ConfigLoader:
 
     def update_config(self, new_data: Dict[str, Any]):
         """
-        Обновляет конфигурацию новыми данными и сохраняет в файл.
+        Updates the configuration with new data and saves it to file.
 
         Args:
-            new_data: Словарь с новыми данными для обновления
+            new_data: Dictionary with new data to update
         """
         self.config.update(new_data)
         self.save_config()
@@ -129,13 +129,13 @@ class ConfigLoader:
             self.logger.debug(f"Updated config with new data")
 
     def clear(self):
-        """Очищает текущую конфигурацию."""
+        """Clears the current configuration."""
         self.config = {}
         if self.logger:
             self.logger.debug("Cleared config")
 
     def delete_config_file(self):
-        """Удаляет файл конфигурации."""
+        """Deletes the configuration file."""
         if os.path.exists(self.config_file):
             os.remove(self.config_file)
             if self.logger:

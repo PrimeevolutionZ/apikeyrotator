@@ -1,5 +1,5 @@
 """
-Базовый протокол для провайдеров секретов
+Base protocol for secret providers
 """
 
 from typing import List, Protocol
@@ -7,25 +7,25 @@ from typing import List, Protocol
 
 class SecretProvider(Protocol):
     """
-    Протокол для провайдеров секретов.
+    Protocol for secret providers.
 
-    Определяет интерфейс для загрузки API ключей из различных источников:
-    - Переменные окружения
-    - Файлы
-    - Облачные хранилища секретов (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
-    - Системы управления секретами (HashiCorp Vault, etc.)
+    Defines the interface for loading API keys from various sources:
+    - Environment variables
+    - Files
+    - Cloud secret stores (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
+    - Secret management systems (HashiCorp Vault, etc.)
 
-    Все провайдеры должны реализовывать два асинхронных метода:
-    - get_keys(): Для первоначальной загрузки ключей
-    - refresh_keys(): Для обновления ключей (ротация, истечение срока действия)
+    All providers must implement two asynchronous methods:
+    - get_keys(): For initial key loading
+    - refresh_keys(): For key refresh (rotation, expiration)
     """
 
     async def get_keys(self) -> List[str]:
         """
-        Асинхронно получает список API ключей.
+        Asynchronously retrieves a list of API keys.
 
         Returns:
-            List[str]: Список API ключей
+            List[str]: List of API keys
 
         Example:
             >>> provider = EnvironmentSecretProvider("API_KEYS")
@@ -37,15 +37,15 @@ class SecretProvider(Protocol):
 
     async def refresh_keys(self) -> List[str]:
         """
-        Асинхронно обновляет список API ключей.
+        Asynchronously refreshes the list of API keys.
 
-        Полезно для:
-        - Ротации ключей
-        - Получения обновлённых значений из хранилища
-        - Обновления при истечении срока действия
+        Useful for:
+        - Key rotation
+        - Fetching updated values from storage
+        - Refreshing upon expiration
 
         Returns:
-            List[str]: Обновлённый список API ключей
+            List[str]: Updated list of API keys
 
         Example:
             >>> provider = AWSSecretsManagerProvider("my-api-keys")

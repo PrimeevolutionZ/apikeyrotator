@@ -1,12 +1,12 @@
 """
-API Key Rotator - мощная библиотека для ротации API ключей
+API Key Rotator - powerful library for API key rotation
 
-Простой в использовании, но feature-rich ротатор API ключей с поддержкой:
-- Множественных стратегий ротации
-- Провайдеров секретов (AWS, GCP, файлы, env)
-- Middleware системы
-- Метрик и мониторинга
-- Автоматического retry и обработки ошибок
+Easy-to-use yet feature-rich API key rotator with support for:
+- Multiple rotation strategies
+- Secret providers (AWS, GCP, files, env)
+- Middleware system
+- Metrics and monitoring
+- Automatic retry and error handling
 """
 
 # Core
@@ -57,7 +57,6 @@ from .middleware import (
 # Metrics
 from .metrics import (
     RotatorMetrics,
-    KeyStats,
     EndpointStats,
     PrometheusExporter,
 )
@@ -114,7 +113,6 @@ __all__ = [
 
     # Metrics
     "RotatorMetrics",
-    "KeyStats",
     "EndpointStats",
     "PrometheusExporter",
 

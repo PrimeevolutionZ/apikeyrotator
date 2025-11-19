@@ -6,10 +6,10 @@ from .exceptions import NoAPIKeysError
 
 def _setup_default_logger():
     """
-    Создает и настраивает логгер по умолчанию.
+    Creates and configures a default logger.
 
     Returns:
-        logging.Logger: Настроенный логгер
+        logging.Logger: Configured logger
     """
     logger = logging.getLogger(__name__)
     if not logger.handlers:
@@ -27,50 +27,50 @@ def parse_keys(
         logger: Optional[logging.Logger] = None
 ) -> List[str]:
     """
-    Умный парсер API ключей из различных источников.
+    Smart parser for API keys from various sources.
 
-    Поддерживает загрузку ключей:
-    1. Напрямую через параметр api_keys (список или строка через запятую)
-    2. Из переменной окружения
-    3. Из .env файла (если используется python-dotenv)
+    Supports loading keys:
+    1. Directly via api_keys parameter (list or comma-separated string)
+    2. From environment variable
+    3. From .env file (if python-dotenv is used)
 
     Args:
-        api_keys: Ключи в виде списка или строки через запятую.
-                 Если None, пытается загрузить из переменной окружения.
-        env_var: Имя переменной окружения для загрузки ключей.
-                По умолчанию "API_KEYS".
-        logger: Логгер для вывода сообщений. Если None, создается новый.
+        api_keys: Keys as a list or comma-separated string.
+                 If None, tries to load from environment variable.
+        env_var: Environment variable name for loading keys.
+                Default is "API_KEYS".
+        logger: Logger for output messages. If None, a new one is created.
 
     Returns:
-        List[str]: Список валидных API ключей (без пустых строк и пробелов)
+        List[str]: List of valid API keys (no empty strings or spaces)
 
     Raises:
-        NoAPIKeysError: Если ключи не найдены или некорректны
+        NoAPIKeysError: If keys are not found or invalid
 
     Examples:
-        >>> # Передача ключей списком
+        >>> # Passing keys as list
         >>> keys = parse_keys(api_keys=["key1", "key2", "key3"])
 
-        >>> # Передача ключей строкой
+        >>> # Passing keys as string
         >>> keys = parse_keys(api_keys="key1,key2,key3")
 
-        >>> # Загрузка из переменной окружения
+        >>> # Loading from environment variable
         >>> os.environ["API_KEYS"] = "key1,key2"
         >>> keys = parse_keys()
 
-        >>> # Загрузка из кастомной переменной
+        >>> # Loading from custom variable
         >>> os.environ["MY_KEYS"] = "key1,key2"
         >>> keys = parse_keys(env_var="MY_KEYS")
     """
     logger = logger if logger else _setup_default_logger()
 
-    # Случай 1: Ключи переданы напрямую
+    # Case 1: Keys passed directly
     if api_keys is not None:
         if isinstance(api_keys, str):
-            # Парсинг строки с разделителями-запятыми
+            # Parsing comma-separated string
             keys = [k.strip() for k in api_keys.split(",") if k.strip()]
         elif isinstance(api_keys, list):
-            # Очистка списка от пустых строк и пробелов
+            # Cleaning list from empty strings and spaces
             keys = [k.strip() for k in api_keys if k and k.strip()]
         else:
             logger.error("❌ API keys must be a list or comma-separated string.")
@@ -83,7 +83,7 @@ def parse_keys(
         logger.debug(f"✅ Parsed {len(keys)} keys from api_keys parameter")
         return keys
 
-    # Случай 2: Загрузка из переменной окружения
+    # Case 2: Loading from environment variable
     keys_str = os.getenv(env_var)
 
     if keys_str is None:
@@ -105,7 +105,7 @@ def parse_keys(
         logger.error(error_msg)
         raise NoAPIKeysError(error_msg)
 
-    # Парсинг ключей из переменной окружения
+    # Parsing keys from environment variable
     keys = [k.strip() for k in keys_str.split(",") if k.strip()]
 
     if not keys:
@@ -123,15 +123,15 @@ def parse_keys(
 
 def validate_key_format(key: str, key_format: Optional[str] = None) -> bool:
     """
-    Валидирует формат API ключа.
+    Validates the format of an API key.
 
     Args:
-        key: API ключ для валидации
-        key_format: Ожидаемый формат ('openai', 'uuid', 'alphanumeric', etc.)
-                   Если None, считается валидным любой непустой ключ
+        key: API key to validate
+        key_format: Expected format ('openai', 'uuid', 'alphanumeric', etc.)
+                   If None, any non-empty key is considered valid
 
     Returns:
-        bool: True если ключ валиден, False иначе
+        bool: True if key is valid, False otherwise
 
     Examples:
         >>> validate_key_format("sk-1234567890", "openai")
@@ -148,18 +148,18 @@ def validate_key_format(key: str, key_format: Optional[str] = None) -> bool:
     key = key.strip()
 
     if key_format == "openai":
-        # OpenAI ключи начинаются с "sk-" или "pk-"
+        # OpenAI keys start with "sk-" or "pk-"
         return key.startswith(("sk-", "pk-")) and len(key) > 10
     elif key_format == "uuid":
-        # UUID формат (32 hex символа с дефисами)
+        # UUID format (32 hex characters with dashes)
         import re
         uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         return bool(re.match(uuid_pattern, key.lower()))
     elif key_format == "alphanumeric":
-        # Только буквы и цифры
+        # Only letters and digits
         return key.isalnum()
     elif key_format == "hex":
-        # Только hex символы
+        # Only hex characters
         try:
             int(key, 16)
             return True
@@ -175,15 +175,15 @@ def filter_valid_keys(
         logger: Optional[logging.Logger] = None
 ) -> List[str]:
     """
-    Фильтрует список ключей, оставляя только валидные.
+    Filters a list of keys, keeping only valid ones.
 
     Args:
-        keys: Список ключей для фильтрации
-        key_format: Ожидаемый формат ключей
-        logger: Логгер для вывода предупреждений
+        keys: List of keys to filter
+        key_format: Expected key format
+        logger: Logger for warning messages
 
     Returns:
-        List[str]: Список валидных ключей
+        List[str]: List of valid keys
 
     Examples:
         >>> keys = ["sk-valid1", "invalid", "sk-valid2"]

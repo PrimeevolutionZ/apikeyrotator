@@ -1,5 +1,5 @@
 """
-Random стратегия ротации
+Random rotation strategy
 """
 
 import random
@@ -9,22 +9,22 @@ from .base import BaseRotationStrategy, KeyMetrics
 
 class RandomRotationStrategy(BaseRotationStrategy):
     """
-    Случайный выбор ключа из доступных.
+    Random key selection from available keys.
 
-    На каждом запросе выбирается случайный ключ из списка.
-    Полезно для избежания предсказуемых паттернов использования.
+    On each request, a random key is selected from the list.
+    Useful for avoiding predictable usage patterns.
 
     Example:
         >>> strategy = RandomRotationStrategy(['key1', 'key2', 'key3'])
-        >>> strategy.get_next_key()  # Случайный ключ из списка
+        >>> strategy.get_next_key()  # Random key from list
     """
 
     def __init__(self, keys: List[str]):
         """
-        Инициализирует стратегию Random.
+        Initializes Random strategy.
 
         Args:
-            keys: Список API ключей для ротации
+            keys: List of API keys for rotation
         """
         super().__init__(keys)
 
@@ -33,12 +33,12 @@ class RandomRotationStrategy(BaseRotationStrategy):
             current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
     ) -> str:
         """
-        Выбирает случайный ключ.
+        Selects a random key.
 
         Args:
-            current_key_metrics: Не используется в этой стратегии
+            current_key_metrics: Not used in this strategy
 
         Returns:
-            str: Случайно выбранный ключ
+            str: Randomly selected key
         """
         return random.choice(self._keys)

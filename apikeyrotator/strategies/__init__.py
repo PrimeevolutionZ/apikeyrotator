@@ -1,5 +1,5 @@
 """
-Strategies пакет - стратегии ротации API ключей
+Strategies package - API key rotation strategies
 """
 
 from .base import BaseRotationStrategy, RotationStrategy, KeyMetrics

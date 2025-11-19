@@ -1,5 +1,5 @@
 """
-Providers пакет - провайдеры секретов для загрузки API ключей
+Providers package - secret providers for loading API keys
 """
 
 from .base import SecretProvider
@@ -8,7 +8,7 @@ from .file import FileSecretProvider
 from .aws import AWSSecretsManagerProvider
 from .factory import create_secret_provider
 
-# Опциональный GCP провайдер
+# Optional GCP provider
 try:
     from .gcp import GCPSecretManagerProvider
     _HAS_GCP = True

@@ -1,11 +1,11 @@
 class APIKeyError(Exception):
-    """Базовое исключение для ошибок API ключей"""
+    """Base exception for API key errors"""
     pass
 
 class NoAPIKeysError(APIKeyError):
-    """Не найдено ни одного API ключа"""
+    """No API keys found"""
     pass
 
 class AllKeysExhaustedError(APIKeyError):
-    """Все ключи исчерпаны"""
+    """All keys are exhausted"""
     pass

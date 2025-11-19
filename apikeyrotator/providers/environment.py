@@ -1,4 +1,4 @@
-"""Провайдер секретов из переменных окружения"""
+"""Secret provider from environment variables"""
 
 import os
 from typing import List
@@ -6,10 +6,10 @@ from typing import List
 
 class EnvironmentSecretProvider:
     """
-    Провайдер секретов из переменных окружения.
+    Secret provider from environment variables.
 
-    Загружает API ключи из переменной окружения.
-    Поддерживает формат: key1,key2,key3
+    Loads API keys from an environment variable.
+    Supports format: key1,key2,key3
     """
 
     def __init__(self, env_var: str = "API_KEYS"):

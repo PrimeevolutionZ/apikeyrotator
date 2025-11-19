@@ -11,59 +11,59 @@ def retry_with_backoff(
         exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
 ) -> Any:
     """
-    Универсальная функция для повторных попыток с экспоненциальной задержкой.
+    Universal function for retries with exponential backoff.
 
-    Выполняет функцию с автоматическими повторными попытками при возникновении
-    исключений. Задержка между попытками увеличивается экспоненциально.
+    Executes a function with automatic retries on exceptions.
+    Delay between attempts increases exponentially.
 
     Args:
-        func: Функция для выполнения
-        retries: Максимальное количество попыток (по умолчанию 3)
-        backoff_factor: Базовая задержка для экспоненциального роста (по умолчанию 0.5)
-        exceptions: Тип(ы) исключений для перехвата (по умолчанию Exception)
+        func: Function to execute
+        retries: Maximum number of attempts (default 3)
+        backoff_factor: Base delay for exponential growth (default 0.5)
+        exceptions: Exception type(s) to catch (default Exception)
 
     Returns:
-        Any: Результат выполнения функции
+        Any: Function execution result
 
     Raises:
-        Exception: Пробрасывает последнее исключение если все попытки исчерпаны
+        Exception: Re-raises last exception if all attempts are exhausted
 
     Examples:
-        >>> # Простой пример
+        >>> # Simple example
         >>> def flaky_request():
         ...     return requests.get('https://api.example.com/data')
         >>> response = retry_with_backoff(flaky_request, retries=5)
 
-        >>> # С конкретными исключениями
+        >>> # With specific exceptions
         >>> response = retry_with_backoff(
         ...     lambda: requests.get('https://api.example.com'),
         ...     retries=3,
         ...     exceptions=requests.RequestException
         ... )
 
-        >>> # С кастомными параметрами
+        >>> # With custom parameters
         >>> response = retry_with_backoff(
         ...     func=my_api_call,
         ...     retries=5,
-        ...     backoff_factor=1.0,  # Начинаем с 1 секунды
+        ...     backoff_factor=1.0,  # Start with 1 second
         ...     exceptions=(ConnectionError, TimeoutError)
         ... )
 
     Note:
-        Задержка вычисляется как: backoff_factor * (2 ** attempt)
-        Например, с backoff_factor=0.5:
-        - Попытка 0: без задержки
-        - Попытка 1: 0.5 сек
-        - Попытка 2: 1.0 сек
-        - Попытка 3: 2.0 сек
-        - Попытка 4: 4.0 сек
+        Delay is calculated as: backoff_factor * (2 ** attempt)
+        For example, with backoff_factor=0.5:
+        - Attempt 0: no delay
+        - Attempt 1: 0.5 sec
+        - Attempt 2: 1.0 sec
+        - Attempt 3: 2.0 sec
+        - Attempt 4: 4.0 sec
     """
     for attempt in range(retries):
         try:
             return func()
         except exceptions as e:
             if attempt == retries - 1:
-                # Последняя попытка - пробрасываем исключение
+                # Last attempt - re-raise exception
                 raise e
 
             delay = backoff_factor * (2 ** attempt)
@@ -78,39 +78,39 @@ async def async_retry_with_backoff(
         exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
 ) -> Any:
     """
-    Асинхронная универсальная функция для повторных попыток с экспоненциальной задержкой.
+    Asynchronous universal function for retries with exponential backoff.
 
-    Выполняет асинхронную функцию с автоматическими повторными попытками.
-    Задержка между попытками увеличивается экспоненциально.
+    Executes an async function with automatic retries.
+    Delay between attempts increases exponentially.
 
     Args:
-        func: Асинхронная функция для выполнения (корутина)
-        retries: Максимальное количество попыток (по умолчанию 3)
-        backoff_factor: Базовая задержка для экспоненциального роста (по умолчанию 0.5)
-        exceptions: Тип(ы) исключений для перехвата (по умолчанию Exception)
+        func: Async function to execute (coroutine)
+        retries: Maximum number of attempts (default 3)
+        backoff_factor: Base delay for exponential growth (default 0.5)
+        exceptions: Exception type(s) to catch (default Exception)
 
     Returns:
-        Any: Результат выполнения функции
+        Any: Function execution result
 
     Raises:
-        Exception: Пробрасывает последнее исключение если все попытки исчерпаны
+        Exception: Re-raises last exception if all attempts are exhausted
 
     Examples:
-        >>> # Простой пример
-                  async def flaky_request():
+        >>> # Simple example
+        >>> async def flaky_request():
         ...     async with aiohttp.ClientSession() as session:
         ...         async with session.get('https://api.example.com') as resp:
         ...             return await resp.json()
-        ... response = await async_retry_with_backoff(flaky_request, retries=5)
+        >>> response = await async_retry_with_backoff(flaky_request, retries=5)
 
-        ... # С конкретными исключениями
-        ... response = await async_retry_with_backoff( response = await async_retry_with_backoff(
+        >>> # With specific exceptions
+        >>> response = await async_retry_with_backoff(
         ...     lambda: session.get('https://api.example.com'),
         ...     retries=3,
         ...     exceptions=aiohttp.ClientError
         ... )
 
-        >>> # В контексте async/await
+        >>> # In async/await context
         >>> async def main():
         ...     result = await async_retry_with_backoff(
         ...         my_async_api_call,
@@ -120,14 +120,14 @@ async def async_retry_with_backoff(
         ...     return result
 
     Note:
-        Использует asyncio.sleep() для неблокирующей задержки между попытками.
+        Uses asyncio.sleep() for non-blocking delay between attempts.
     """
     for attempt in range(retries):
         try:
             return await func()
         except exceptions as e:
             if attempt == retries - 1:
-                # Последняя попытка - пробрасываем исключение
+                # Last attempt - re-raise exception
                 raise e
 
             delay = backoff_factor * (2 ** attempt)
@@ -137,15 +137,15 @@ async def async_retry_with_backoff(
 
 def exponential_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
     """
-    Вычисляет задержку для экспоненциального backoff.
+    Calculates delay for exponential backoff.
 
     Args:
-        attempt: Номер попытки (начиная с 0)
-        base_delay: Базовая задержка в секундах (по умолчанию 1.0)
-        max_delay: Максимальная задержка в секундах (по умолчанию 60.0)
+        attempt: Attempt number (starting from 0)
+        base_delay: Base delay in seconds (default 1.0)
+        max_delay: Maximum delay in seconds (default 60.0)
 
     Returns:
-        float: Задержка в секундах
+        float: Delay in seconds
 
     Examples:
         >>> for i in range(5):
@@ -163,18 +163,18 @@ def exponential_backoff(attempt: int, base_delay: float = 1.0, max_delay: float 
 
 def jittered_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
     """
-    Вычисляет задержку с добавлением случайного jitter.
+    Calculates delay with added random jitter.
 
-    Добавление jitter помогает избежать "thundering herd problem",
-    когда множество клиентов одновременно повторяют запросы.
+    Adding jitter helps avoid the "thundering herd problem"
+    when many clients retry requests simultaneously.
 
     Args:
-        attempt: Номер попытки (начиная с 0)
-        base_delay: Базовая задержка в секундах (по умолчанию 1.0)
-        max_delay: Максимальная задержка в секундах (по умолчанию 60.0)
+        attempt: Attempt number (starting from 0)
+        base_delay: Base delay in seconds (default 1.0)
+        max_delay: Maximum delay in seconds (default 60.0)
 
     Returns:
-        float: Задержка в секундах с jitter
+        float: Delay in seconds with jitter
 
     Examples:
         >>> import random
@@ -185,21 +185,21 @@ def jittered_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 6
     """
     import random
     base = exponential_backoff(attempt, base_delay, max_delay)
-    jitter = random.uniform(0, base * 0.1)  # Добавляем до 10% случайного jitter
+    jitter = random.uniform(0, base * 0.1)  # Add up to 10% random jitter
     return min(base + jitter, max_delay)
 
 
 class CircuitBreaker:
     """
-    Паттерн Circuit Breaker для предотвращения каскадных отказов.
+    Circuit Breaker pattern for preventing cascading failures.
 
-    Отслеживает количество последовательных ошибок и временно
-    прекращает отправку запросов при превышении порога.
+    Tracks consecutive error count and temporarily
+    stops sending requests when threshold is exceeded.
 
-    Состояния:
-    - CLOSED: Нормальная работа, запросы проходят
-    - OPEN: Слишком много ошибок, запросы блокируются
-    - HALF_OPEN: Пробный период после восстановления
+    States:
+    - CLOSED: Normal operation, requests pass
+    - OPEN: Too many errors, requests blocked
+    - HALF_OPEN: Trial period after recovery
 
     Example:
         >>> breaker = CircuitBreaker(failure_threshold=5, timeout=60)
@@ -219,11 +219,11 @@ class CircuitBreaker:
 
     def __init__(self, failure_threshold: int = 5, timeout: int = 60):
         """
-        Инициализирует Circuit Breaker.
+        Initializes Circuit Breaker.
 
         Args:
-            failure_threshold: Количество ошибок для открытия circuit
-            timeout: Время в секундах до перехода в HALF_OPEN
+            failure_threshold: Number of errors to open circuit
+            timeout: Time in seconds until transition to HALF_OPEN
         """
         self.failure_threshold = failure_threshold
         self.timeout = timeout
@@ -233,16 +233,16 @@ class CircuitBreaker:
 
     def allow_request(self) -> bool:
         """
-        Проверяет, можно ли выполнить запрос.
+        Checks if request can be executed.
 
         Returns:
-            bool: True если запрос разрешён, False иначе
+            bool: True if request allowed, False otherwise
         """
         if self.state == 'CLOSED':
             return True
 
         if self.state == 'OPEN':
-            # Проверяем, прошло ли достаточно времени для перехода в HALF_OPEN
+            # Check if enough time has passed to transition to HALF_OPEN
             if time.time() - self.last_failure_time >= self.timeout:
                 self.state = 'HALF_OPEN'
                 return True
@@ -252,12 +252,12 @@ class CircuitBreaker:
         return True
 
     def record_success(self):
-        """Записывает успешный запрос."""
+        """Records successful request."""
         self.failures = 0
         self.state = 'CLOSED'
 
     def record_failure(self):
-        """Записывает неудачный запрос."""
+        """Records failed request."""
         self.failures += 1
         self.last_failure_time = time.time()
 
@@ -267,15 +267,15 @@ class CircuitBreaker:
 
     def get_state(self) -> str:
         """
-        Получить текущее состояние circuit breaker.
+        Get current circuit breaker state.
 
         Returns:
-            str: 'CLOSED', 'OPEN' или 'HALF_OPEN'
+            str: 'CLOSED', 'OPEN' or 'HALF_OPEN'
         """
         return self.state
 
     def reset(self):
-        """Сбрасывает circuit breaker в исходное состояние."""
+        """Resets circuit breaker to initial state."""
         self.failures = 0
         self.last_failure_time = 0
         self.state = 'CLOSED'
@@ -283,13 +283,13 @@ class CircuitBreaker:
 
 def measure_time(func: Callable) -> Callable:
     """
-    Декоратор для измерения времени выполнения функции.
+    Decorator for measuring function execution time.
 
     Args:
-        func: Функция для измерения
+        func: Function to measure
 
     Returns:
-        Callable: Обёрнутая функция
+        Callable: Wrapped function
 
     Examples:
         >>> @measure_time
@@ -312,20 +312,20 @@ def measure_time(func: Callable) -> Callable:
 
 def measure_time_async(func: Callable) -> Callable:
     """
-    Декоратор для измерения времени выполнения асинхронной функции.
+    Decorator for measuring async function execution time.
 
     Args:
-        func: Асинхронная функция для измерения
+        func: Async function to measure
 
     Returns:
-        Callable: Обёрнутая функция
+        Callable: Wrapped function
 
     Examples:
         >>> @measure_time_async
         ... async def slow_function():
         ...     await asyncio.sleep(1)
         ...     return "done"
-         result = await slow_function()
+        >>> result = await slow_function()
         ⏱️  slow_function took 1.00s
     """
 

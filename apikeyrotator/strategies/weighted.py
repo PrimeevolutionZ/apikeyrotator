@@ -1,5 +1,5 @@
 """
-Weighted (взвешенная) стратегия ротации
+Weighted rotation strategy
 """
 
 import random
@@ -9,13 +9,13 @@ from .base import BaseRotationStrategy, KeyMetrics
 
 class WeightedRotationStrategy(BaseRotationStrategy):
     """
-    Взвешенная ротация ключей на основе заданных весов.
+    Weighted key rotation based on assigned weights.
 
-    Ключи с большим весом будут использоваться чаще.
-    Полезно когда разные ключи имеют разные лимиты или приоритеты.
+    Keys with higher weights will be used more frequently.
+    Useful when different keys have different limits or priorities.
 
     Example:
-        >>> # 70% запросов на key1, 30% на key2
+        >>> # 70% requests to key1, 30% to key2
         >>> weights = {'key1': 0.7, 'key2': 0.3}
         >>> strategy = WeightedRotationStrategy(weights)
         >>> strategy.get_next_key()
@@ -23,15 +23,15 @@ class WeightedRotationStrategy(BaseRotationStrategy):
 
     def __init__(self, keys: Dict[str, float]):
         """
-        Инициализирует стратегию Weighted.
+        Initializes Weighted strategy.
 
         Args:
-            keys: Словарь {ключ: вес}, где вес - это вероятность выбора
-                  Веса не обязательно должны суммироваться в 1.0
+            keys: Dict {key: weight}, where weight is selection probability
+                  Weights don't have to sum to 1.0
 
         Example:
             >>> WeightedRotationStrategy({'key1': 2.0, 'key2': 1.0})
-            >>> # key1 будет выбираться в 2 раза чаще чем key2
+            >>> # key1 will be selected twice as often as key2
         """
         super().__init__(keys)
         self._weights = keys
@@ -43,13 +43,13 @@ class WeightedRotationStrategy(BaseRotationStrategy):
             current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
     ) -> str:
         """
-        Выбирает ключ с учетом весов.
+        Selects key considering weights.
 
         Args:
-            current_key_metrics: Не используется в этой стратегии
+            current_key_metrics: Not used in this strategy
 
         Returns:
-            str: Ключ, выбранный с учетом весовых коэффициентов
+            str: Key selected according to weight coefficients
         """
         return random.choices(
             self._keys_list,

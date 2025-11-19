@@ -1,4 +1,4 @@
-"""Базовый протокол для middleware"""
+"""Base protocol for middleware"""
 
 from typing import Protocol
 from .models import RequestInfo, ResponseInfo, ErrorInfo
@@ -6,26 +6,25 @@ from .models import RequestInfo, ResponseInfo, ErrorInfo
 
 class RotatorMiddleware(Protocol):
     """
-    Протокол для middleware ротатора.
+    Protocol for rotator middleware.
 
-    Middleware позволяет перехватывать и модифицировать запросы,
-    ответы и обрабатывать ошибки.
+    Middleware allows intercepting and modifying requests,
+    responses, and handling errors.
     """
 
     async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        """Вызывается перед отправкой запроса"""
+        """Called before sending the request"""
         return request_info
 
     async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        """Вызывается после успешного ответа"""
+        """Called after a successful response"""
         return response_info
 
     async def on_error(self, error_info: ErrorInfo) -> bool:
         """
-        Вызывается при ошибке.
+        Called when an error occurs.
 
         Returns:
-            bool: True если ошибка обработана, False для пробрасывания
+            bool: True if the error was handled, False to propagate
         """
         return False
-

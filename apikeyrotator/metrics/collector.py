@@ -1,104 +1,90 @@
-# ===========================================
-# metrics/models.py
-# ===========================================
-"""Модели данных для метрик"""
+"""
+Metrics collector for the rotator
+"""
 
+import time
+import threading
+from collections import defaultdict
 from typing import Dict, Any
-
-
-class KeyStats:
-    """Статистика для одного API ключа"""
-
-    def __init__(self):
-        self.total_requests = 0
-        self.successful_requests = 0
-        self.failed_requests = 0
-        self.avg_response_time = 0.0
-        self.last_used = 0.0
-        self.last_success = 0.0
-        self.last_failure = 0.0
-        self.consecutive_failures = 0
-        self.rate_limit_hits = 0
-        self.is_healthy = True
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "total_requests": self.total_requests,
-            "successful_requests": self.successful_requests,
-            "failed_requests": self.failed_requests,
-            "avg_response_time": self.avg_response_time,
-            "last_used": self.last_used,
-            "last_success": self.last_success,
-            "last_failure": self.last_failure,
-            "consecutive_failures": self.consecutive_failures,
-            "rate_limit_hits": self.rate_limit_hits,
-            "is_healthy": self.is_healthy,
-        }
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> 'KeyStats':
-        stats = KeyStats()
-        for field, value in data.items():
-            if hasattr(stats, field):
-                setattr(stats, field, value)
-        return stats
 
 
 class EndpointStats:
-    """Статистика для endpoint"""
+    """
+    Statistics for an endpoint.
+    Thread-safe version.
+    """
 
     def __init__(self):
         self.total_requests = 0
         self.successful_requests = 0
         self.failed_requests = 0
         self.avg_response_time = 0.0
+        self._lock = threading.RLock()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "total_requests": self.total_requests,
-            "successful_requests": self.successful_requests,
-            "failed_requests": self.failed_requests,
-            "avg_response_time": self.avg_response_time,
-        }
+        """Serialization to dictionary (thread-safe)"""
+        with self._lock:
+            return {
+                "total_requests": self.total_requests,
+                "successful_requests": self.successful_requests,
+                "failed_requests": self.failed_requests,
+                "avg_response_time": self.avg_response_time,
+            }
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> 'EndpointStats':
+        """Deserialization from dictionary"""
         stats = EndpointStats()
         for field, value in data.items():
-            if hasattr(stats, field):
+            if hasattr(stats, field) and not field.startswith('_'):
                 setattr(stats, field, value)
         return stats
 
+    def update(self, success: bool, response_time: float):
+        """
+        Updates endpoint statistics (thread-safe).
 
-# ===========================================
-# metrics/collector.py
-# ===========================================
-"""Сборщик метрик"""
+        Args:
+            success: Whether the request was successful
+            response_time: Execution time
+        """
+        with self._lock:
+            self.total_requests += 1
+            if success:
+                self.successful_requests += 1
+            else:
+                self.failed_requests += 1
 
-import time
-from collections import defaultdict
-from typing import Dict, Any
-from .models import KeyStats, EndpointStats
+            if self.total_requests > 0:
+                self.avg_response_time = (
+                                                 self.avg_response_time * (self.total_requests - 1) + response_time
+                                         ) / self.total_requests
 
 
 class RotatorMetrics:
     """
-    Центральный сборщик метрик для ротатора.
+    Central metrics collector for the rotator.
+    Tracks:
+    - General statistics (total requests, successful, errors)
+    - Statistics for each endpoint
+    - Uptime
 
-    Отслеживает:
-    - Общую статистику (всего запросов, успешных, ошибок)
-    - Статистику по каждому ключу
-    - Статистику по каждому endpoint
-    - Время работы (uptime)
+    Note: Key metrics are now stored in BaseKeyRotator._key_metrics
     """
 
     def __init__(self):
-        self.key_stats: Dict[str, KeyStats] = defaultdict(KeyStats)
+        # Statistics by endpoint
         self.endpoint_stats: Dict[str, EndpointStats] = defaultdict(EndpointStats)
+
+        # General statistics
         self.total_requests = 0
         self.successful_requests = 0
         self.failed_requests = 0
         self.start_time = time.time()
+
+        # Thread-safety
+        self._lock = threading.RLock()
+        self._endpoint_lock = threading.RLock()
 
     def record_request(
             self,
@@ -109,67 +95,82 @@ class RotatorMetrics:
             is_rate_limited: bool = False
     ):
         """
-        Записывает метрики запроса.
+        Records request metrics.
 
         Args:
-            key: API ключ
+            key: API key (used only for compatibility, key metrics are in the rotator)
             endpoint: URL endpoint
-            success: Успешность запроса
-            response_time: Время выполнения в секундах
-            is_rate_limited: Был ли rate limit
+            success: Whether the request was successful
+            response_time: Execution time in seconds
+            is_rate_limited: Whether rate limit was hit
         """
-        # Общая статистика
-        self.total_requests += 1
-        if success:
-            self.successful_requests += 1
-        else:
-            self.failed_requests += 1
+        # General statistics (thread-safe)
+        with self._lock:
+            self.total_requests += 1
+            if success:
+                self.successful_requests += 1
+            else:
+                self.failed_requests += 1
 
-        # Статистика ключа
-        key_stat = self.key_stats[key]
-        key_stat.total_requests += 1
-        key_stat.last_used = time.time()
-
-        if success:
-            key_stat.successful_requests += 1
-            key_stat.last_success = time.time()
-            key_stat.consecutive_failures = 0
-        else:
-            key_stat.failed_requests += 1
-            key_stat.last_failure = time.time()
-            key_stat.consecutive_failures += 1
-
-        if is_rate_limited:
-            key_stat.rate_limit_hits += 1
-
-        # Обновляем среднее время ответа
-        if key_stat.total_requests > 0:
-            key_stat.avg_response_time = (
-                                                 key_stat.avg_response_time * (
-                                                     key_stat.total_requests - 1) + response_time
-                                         ) / key_stat.total_requests
-
-        # Статистика endpoint
-        ep_stat = self.endpoint_stats[endpoint]
-        ep_stat.total_requests += 1
-        if success:
-            ep_stat.successful_requests += 1
-        else:
-            ep_stat.failed_requests += 1
-
-        if ep_stat.total_requests > 0:
-            ep_stat.avg_response_time = (
-                                                ep_stat.avg_response_time * (ep_stat.total_requests - 1) + response_time
-                                        ) / ep_stat.total_requests
+        # Endpoint statistics (separate lock to minimize contention)
+        with self._endpoint_lock:
+            self.endpoint_stats[endpoint].update(success, response_time)
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Получить все метрики в виде словаря"""
-        uptime = time.time() - self.start_time
-        return {
-            "total_requests": self.total_requests,
-            "successful_requests": self.successful_requests,
-            "failed_requests": self.failed_requests,
-            "uptime_seconds": uptime,
-            "key_stats": {k: v.to_dict() for k, v in self.key_stats.items()},
-            "endpoint_stats": {k: v.to_dict() for k, v in self.endpoint_stats.items()},
-        }
+        """
+        Get all metrics as a dictionary (thread-safe).
+
+        Note: Key metrics are now obtained via rotator.get_key_statistics()
+        """
+        with self._lock, self._endpoint_lock:
+            uptime = time.time() - self.start_time
+            return {
+                "total_requests": self.total_requests,
+                "successful_requests": self.successful_requests,
+                "failed_requests": self.failed_requests,
+                "success_rate": (
+                    self.successful_requests / self.total_requests
+                    if self.total_requests > 0 else 0.0
+                ),
+                "uptime_seconds": uptime,
+                "endpoint_stats": {
+                    k: v.to_dict() for k, v in self.endpoint_stats.items()
+                },
+            }
+
+    def get_endpoint_stats(self, endpoint: str) -> Dict[str, Any]:
+        """Get statistics for a specific endpoint"""
+        with self._endpoint_lock:
+            if endpoint in self.endpoint_stats:
+                return self.endpoint_stats[endpoint].to_dict()
+            return {}
+
+    def get_top_endpoints(self, limit: int = 10) -> list:
+        """
+        Get top endpoints by number of requests.
+
+        Args:
+            limit: Number of endpoints
+
+        Returns:
+            list: List of tuples (endpoint, total_requests)
+        """
+        with self._endpoint_lock:
+            sorted_endpoints = sorted(
+                self.endpoint_stats.items(),
+                key=lambda x: x[1].total_requests,
+                reverse=True
+            )
+            return [
+                (endpoint, stats.total_requests)
+                for endpoint, stats in sorted_endpoints[:limit]
+            ]
+
+    def reset(self):
+        """Resets all metrics"""
+        with self._lock, self._endpoint_lock:
+            self.endpoint_stats.clear()
+            self.total_requests = 0
+            self.successful_requests = 0
+            self.failed_requests = 0
+            self.start_time = time.time()

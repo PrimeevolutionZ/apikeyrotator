@@ -1,18 +1,18 @@
 from enum import Enum
-from typing import Optional, Union
+from typing import Optional
 import requests
 
 
 class ErrorType(Enum):
     """
-    Типы ошибок для классификации HTTP запросов.
+    Types of errors for classifying HTTP requests.
 
     Attributes:
-        RATE_LIMIT: Превышен лимит запросов (429)
-        TEMPORARY: Временная ошибка сервера (5xx)
-        PERMANENT: Постоянная ошибка (401, 403, 4xx)
-        NETWORK: Проблемы с сетью или соединением
-        UNKNOWN: Неизвестный тип ошибки
+        RATE_LIMIT: Request limit exceeded (429)
+        TEMPORARY: Temporary server error (5xx, 408, some network errors)
+        PERMANENT: Permanent error (401, 403, 404, 410)
+        NETWORK: Network or connection issues
+        UNKNOWN: Unknown error type
     """
     RATE_LIMIT = "rate_limit"
     TEMPORARY = "temporary"
@@ -23,11 +23,17 @@ class ErrorType(Enum):
 
 class ErrorClassifier:
     """
-    Классификатор ошибок HTTP запросов.
-
-    Определяет тип ошибки для принятия решения о необходимости retry
-    и переключения ключей API.
+    HTTP request error classifier.
+    Determines the error type to decide whether a retry is needed
+    and whether to switch API keys.
     """
+
+    def __init__(self, custom_retryable_codes: Optional[list] = None):
+        """
+        Args:
+            custom_retryable_codes: Additional status codes considered temporary
+        """
+        self.custom_retryable_codes = set(custom_retryable_codes or [])
 
     def classify_error(
             self,
@@ -35,56 +41,133 @@ class ErrorClassifier:
             exception: Optional[Exception] = None
     ) -> ErrorType:
         """
-        Классифицирует ошибки для принятия решения о retry.
+        Classifies errors to decide whether to retry.
 
-        Логика классификации:
-        - RATE_LIMIT (429): нужно переключить ключ
-        - TEMPORARY (5xx): можно повторить с тем же ключом
-        - PERMANENT (401, 403, 4xx): ключ неработоспособен, нужно удалить
-        - NETWORK: проблемы с сетью/прокси, можно повторить
-        - UNKNOWN: неизвестная ошибка
+        FIXED: More precise logic for 4xx codes:
+        - 408 Request Timeout - TEMPORARY (can retry)
+        - 409 Conflict - TEMPORARY (may resolve)
+        - 429 Too Many Requests - RATE_LIMIT
+        - 401, 403 - PERMANENT (key issue)
+        - 404, 410 - PERMANENT (resource does not exist)
+        - Other 4xx - PERMANENT
+
+        Classification logic:
+        - RATE_LIMIT (429): need to switch key
+        - TEMPORARY (5xx, 408, 409, 503): can retry with the same key
+        - PERMANENT (401, 403, 404, 410, other 4xx): key is invalid or request is incorrect
+        - NETWORK: network/proxy issues, can retry
+        - UNKNOWN: unknown error
 
         Args:
-            response: HTTP ответ от сервера (опционально)
-            exception: Исключение, возникшее при запросе (опционально)
+            response: HTTP response from server (optional)
+            exception: Exception raised during request (optional)
 
         Returns:
-            ErrorType: Тип классифицированной ошибки
+            ErrorType: Classified error type
 
         Examples:
             >>> classifier = ErrorClassifier()
-            >>> # Классификация по ответу
+            >>> # Classification by response
             >>> error_type = classifier.classify_error(response=response_obj)
-            >>> # Классификация по исключению
+            >>> # Classification by exception
             >>> error_type = classifier.classify_error(exception=connection_error)
         """
-        # Классификация исключений
+        # Classify exceptions
         if exception:
-            if isinstance(exception, (requests.exceptions.ConnectionError,
-                                      requests.exceptions.Timeout)):
+            if isinstance(exception, (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.ConnectTimeout,
+                    requests.exceptions.ReadTimeout,
+                    requests.exceptions.Timeout
+            )):
                 return ErrorType.NETWORK
+
+            # SSL errors - usually temporary (may be proxy certificate issues)
+            if isinstance(exception, requests.exceptions.SSLError):
+                return ErrorType.TEMPORARY
+
+            # Other requests exceptions
+            if isinstance(exception, requests.exceptions.RequestException):
+                return ErrorType.NETWORK
+
             return ErrorType.UNKNOWN
 
-        # Если нет ответа, возвращаем UNKNOWN
+        # If no response, return UNKNOWN
         if response is None:
             return ErrorType.UNKNOWN
 
         status_code = response.status_code
 
-        # Классификация по статус коду
+        # User-defined retry codes
+        if status_code in self.custom_retryable_codes:
+            return ErrorType.TEMPORARY
+
+        # Classification by status code
         if status_code == 429:
             # Too Many Requests - Rate Limit
             return ErrorType.RATE_LIMIT
-        elif status_code in [500, 502, 503, 504]:
-            # Server errors - часто временные
+
+        # FIXED: More detailed 4xx classification
+        elif status_code == 408:
+            # Request Timeout - temporary error, can retry
             return ErrorType.TEMPORARY
+
+        elif status_code == 409:
+            # Conflict - may resolve on retry (e.g., concurrent updates)
+            return ErrorType.TEMPORARY
+
+        elif status_code == 425:
+            # Too Early - server not ready to process request, can retry
+            return ErrorType.TEMPORARY
+
         elif status_code in [401, 403]:
-            # Unauthorized, Forbidden - проблема с ключом
-            return ErrorType.PERMANENT
-        elif 400 <= status_code < 500:
-            # Другие клиентские ошибки - считаем постоянными
+            # Unauthorized, Forbidden - API key issue
             return ErrorType.PERMANENT
 
+        elif status_code in [404, 410]:
+            # Not Found, Gone - resource does not exist (invalid endpoint)
+            return ErrorType.PERMANENT
+
+        elif status_code in [400, 405, 406, 411, 412, 413, 414, 415, 416, 417, 422, 428, 431]:
+            # Client errors related to malformed requests
+            # 400 Bad Request
+            # 405 Method Not Allowed
+            # 406 Not Acceptable
+            # 411 Length Required
+            # 412 Precondition Failed
+            # 413 Payload Too Large
+            # 414 URI Too Long
+            # 415 Unsupported Media Type
+            # 416 Range Not Satisfiable
+            # 417 Expectation Failed
+            # 422 Unprocessable Entity
+            # 428 Precondition Required
+            # 431 Request Header Fields Too Large
+            return ErrorType.PERMANENT
+
+        elif 400 <= status_code < 500:
+            # Other 4xx - considered permanent (bad request)
+            return ErrorType.PERMANENT
+
+        # Server errors
+        elif status_code in [500, 502, 503, 504]:
+            # Internal Server Error, Bad Gateway, Service Unavailable, Gateway Timeout
+            # Usually temporary issues
+            return ErrorType.TEMPORARY
+
+        elif status_code == 507:
+            # Insufficient Storage - may be temporary
+            return ErrorType.TEMPORARY
+
+        elif status_code == 511:
+            # Network Authentication Required - may need manual intervention
+            return ErrorType.PERMANENT
+
+        elif 500 <= status_code < 600:
+            # Other 5xx - considered temporary
+            return ErrorType.TEMPORARY
+
+        # 2xx, 3xx and other codes - not errors
         return ErrorType.UNKNOWN
 
     def is_retryable(
@@ -93,14 +176,14 @@ class ErrorClassifier:
             exception: Optional[Exception] = None
     ) -> bool:
         """
-        Определяет, можно ли повторить запрос.
+        Determines whether the request can be retried.
 
         Args:
-            response: HTTP ответ от сервера (опционально)
-            exception: Исключение, возникшее при запросе (опционально)
+            response: HTTP response from server (optional)
+            exception: Exception raised during request (optional)
 
         Returns:
-            bool: True если запрос можно повторить, False иначе
+            bool: True if request can be retried, False otherwise
         """
         error_type = self.classify_error(response, exception)
         return error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.NETWORK]
@@ -111,16 +194,17 @@ class ErrorClassifier:
             exception: Optional[Exception] = None
     ) -> bool:
         """
-        Определяет, нужно ли переключить API ключ.
+        Determines whether to switch the API key.
 
         Args:
-            response: HTTP ответ от сервера (опционально)
-            exception: Исключение, возникшее при запросе (опционально)
+            response: HTTP response from server (optional)
+            exception: Exception raised during request (optional)
 
         Returns:
-            bool: True если нужно переключить ключ, False иначе
+            bool: True if key should be switched, False otherwise
         """
         error_type = self.classify_error(response, exception)
+        # Switch key on rate limit or permanent errors
         return error_type in [ErrorType.RATE_LIMIT, ErrorType.PERMANENT]
 
     def should_remove_key(
@@ -129,14 +213,61 @@ class ErrorClassifier:
             exception: Optional[Exception] = None
     ) -> bool:
         """
-        Определяет, нужно ли удалить API ключ из ротации.
+        Determines whether to remove the API key from rotation.
 
         Args:
-            response: HTTP ответ от сервера (опционально)
-            exception: Исключение, возникшее при запросе (опционально)
+            response: HTTP response from server (optional)
+            exception: Exception raised during request (optional)
 
         Returns:
-            bool: True если ключ нужно удалить, False иначе
+            bool: True if key should be removed, False otherwise
         """
         error_type = self.classify_error(response, exception)
-        return error_type == ErrorType.PERMANENT
+        # Remove only on explicitly permanent errors (401, 403)
+        if response and response.status_code in [401, 403]:
+            return True
+        return error_type == ErrorType.PERMANENT and response and response.status_code in [401, 403]
+
+    def get_retry_delay(
+            self,
+            response: Optional[requests.Response] = None,
+            default_delay: float = 1.0
+    ) -> float:
+        """
+        Determines optimal retry delay based on response.
+
+        Args:
+            response: HTTP response from server
+            default_delay: Default delay
+
+        Returns:
+            float: Recommended delay in seconds
+        """
+        if not response:
+            return default_delay
+
+        # Check Retry-After header
+        retry_after = response.headers.get('Retry-After')
+        if retry_after:
+            try:
+                # May be number of seconds
+                if retry_after.isdigit():
+                    return float(retry_after)
+                # Or HTTP date
+                from email.utils import parsedate_to_datetime
+                import time
+                target_time = parsedate_to_datetime(retry_after).timestamp()
+                delay = max(0, target_time - time.time())
+                return delay
+            except (ValueError, TypeError):
+                pass
+
+        # For rate limit, usually wait longer
+        if response.status_code == 429:
+            return default_delay * 5
+
+        # For server errors - standard delay
+        if 500 <= response.status_code < 600:
+            return default_delay
+
+        return default_delay

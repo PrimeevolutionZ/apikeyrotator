@@ -1,4 +1,4 @@
-"""Фабрика для создания провайдеров секретов"""
+"""Factory for creating secret providers"""
 
 from typing import Union
 from .base import SecretProvider
@@ -10,14 +10,14 @@ from .gcp import GCPSecretManagerProvider
 
 def create_secret_provider(provider_type: str, **kwargs) -> SecretProvider:
     """
-    Фабричная функция для создания провайдера секретов.
+    Factory function for creating a secret provider.
 
     Args:
-        provider_type: Тип провайдера
-        **kwargs: Параметры для конкретного провайдера
+        provider_type: Provider type
+        **kwargs: Parameters for the specific provider
 
     Returns:
-        SecretProvider: Экземпляр провайдера
+        SecretProvider: Provider instance
 
     Examples:
         >>> # Environment

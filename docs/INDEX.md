@@ -8,14 +8,15 @@ This documentation will help you get started with APIKeyRotator and master its a
 
 ### Quick Navigation
 
-| Document | Description | Best For |
-|----------|-------------|----------|
-| [Getting Started](GETTING_STARTED.md) | Installation, basic usage, and core concepts | New users, quick start |
-| [API Reference](API_REFERENCE.md) | Complete API documentation | Looking up specific methods/parameters |
-| [Examples](EXAMPLES.md) | Real-world code examples | Practical implementation patterns |
-| [Advanced Usage](ADVANCED_USAGE.md) | Power features and customization | Advanced users, custom implementations |
-| [Error Handling](ERROR_HANDLING.md) | Comprehensive error management guide | Debugging, production deployment |
-| [FAQ](FAQ.md) | Frequently asked questions | Quick answers to common questions |
+| Document                              | Description                                  | Best For                               |
+|---------------------------------------|----------------------------------------------|----------------------------------------|
+| [Getting Started](GETTING_STARTED.md) | Installation, basic usage, and core concepts | New users, quick start                 |
+| [API Reference](API_REFERENCE.md)     | Complete API documentation                   | Looking up specific methods/parameters |
+| [Middleware Guide](MIDDLEWARE.md)     | Request/response interception system         | Custom processing, caching, logging    |
+| [Examples](EXAMPLES.md)               | Real-world code examples                     | Practical implementation patterns      |
+| [Advanced Usage](ADVANCED_USAGE.md)   | Power features and customization             | Advanced users, custom implementations |
+| [Error Handling](ERROR_HANDLING.md)   | Comprehensive error management guide         | Debugging, production deployment       |
+| [FAQ](FAQ.md)                         | Frequently asked questions                   | Quick answers to common questions      |
 
 ---
 
@@ -79,6 +80,9 @@ Complete technical reference for all classes, methods, and parameters.
 - `AsyncAPIKeyRotator` class (asynchronous)
 - Error classification system
 - Rotation strategies
+- Middleware system
+- Metrics and monitoring
+- Secret providers
 - Configuration management
 - Custom callbacks
 - Exception types
@@ -90,12 +94,35 @@ Complete technical reference for all classes, methods, and parameters.
 
 ---
 
+### [Middleware Guide](MIDDLEWARE.md)
+
+Comprehensive guide to the middleware system for request/response interception.
+
+**Topics covered:**
+- Middleware architecture and lifecycle
+- Built-in middleware (Caching, Logging, Rate Limit, Retry)
+- Creating custom middleware
+- Middleware best practices
+- Advanced middleware patterns
+- Performance considerations
+
+**Perfect for:**
+- Implementing caching strategies
+- Adding custom logging
+- Building complex request pipelines
+- Intercepting and modifying requests/responses
+
+---
+
 ### [Examples](EXAMPLES.md)
 
 Real-world code examples demonstrating various use cases.
 
 **Topics covered:**
 - Basic usage patterns
+- Middleware usage examples
+- Metrics and monitoring
+- Secret providers
 - Web scraping with anti-bot features
 - Data collection from APIs
 - REST and GraphQL API integration
@@ -114,10 +141,13 @@ Real-world code examples demonstrating various use cases.
 Deep dive into advanced features and customization options.
 
 **Topics covered:**
+- Middleware system overview
+- Rotation strategies (round-robin, random, weighted, LRU, health-based)
+- Metrics and monitoring
+- Secret providers (AWS, GCP, File, Environment)
 - Custom callbacks (retry logic, headers)
 - Anti-bot evasion (User-Agent rotation, proxies, delays)
 - Custom error classification
-- Rotation strategies (round-robin, random, weighted)
 - Session management
 - Configuration management
 - Performance optimization
@@ -174,16 +204,18 @@ Quick answers to frequently asked questions.
 
 ### Common Tasks
 
-| Task | Go To |
-|------|-------|
-| Install the library | [Getting Started](GETTING_STARTED.md#installation) |
-| Make first request | [Getting Started](GETTING_STARTED.md#quick-start) |
-| Handle rate limits | [Advanced Usage](ADVANCED_USAGE.md#anti-bot-evasion) |
+| Task                | Go To                                                |
+|---------------------|------------------------------------------------------|
+| Install the library | [Getting Started](GETTING_STARTED.md#installation)   |
+| Make first request  | [Getting Started](GETTING_STARTED.md#quick-start)    |
+| Use middleware      | [Middleware Guide](MIDDLEWARE.md)                    |
+| Handle rate limits  | [Advanced Usage](ADVANCED_USAGE.md#anti-bot-evasion) |
 | Use with async code | [API Reference](API_REFERENCE.md#asyncapikeyrotator) |
-| Add custom headers | [Advanced Usage](ADVANCED_USAGE.md#custom-callbacks) |
-| Handle errors | [Error Handling](ERROR_HANDLING.md) |
-| See examples | [Examples](EXAMPLES.md) |
-| Debug issues | [FAQ](FAQ.md#error-handling) |
+| Add custom headers  | [Advanced Usage](ADVANCED_USAGE.md#custom-callbacks) |
+| Track metrics       | [Advanced Usage](ADVANCED_USAGE.md#metrics-and-monitoring) |
+| Handle errors       | [Error Handling](ERROR_HANDLING.md)                  |
+| See examples        | [Examples](EXAMPLES.md)                              |
+| Debug issues        | [FAQ](FAQ.md#error-handling)                         |
 
 ### Code Snippets
 
@@ -196,14 +228,34 @@ rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"])
 response = rotator.get("https://api.example.com/data")
 ```
 
+#### With Middleware
+
+```python
+from apikeyrotator import APIKeyRotator
+from apikeyrotator.middleware import CachingMiddleware, LoggingMiddleware
+
+cache = CachingMiddleware(ttl=600)
+logger = LoggingMiddleware(verbose=True)
+
+rotator = APIKeyRotator(
+    api_keys=["key1", "key2"],
+    middlewares=[cache, logger]
+)
+```
+
 #### With Rate Limit Protection
 
 ```python
+from apikeyrotator.middleware import RateLimitMiddleware
+
+rate_limit = RateLimitMiddleware(pause_on_limit=True)
+
 rotator = APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
     max_retries=5,
     base_delay=2.0,
-    random_delay_range=(1.0, 3.0)
+    random_delay_range=(1.0, 3.0),
+    middlewares=[rate_limit]
 )
 ```
 
@@ -222,16 +274,24 @@ async def main():
 asyncio.run(main())
 ```
 
-#### With Error Handling
+#### With Error Handling and Metrics
 
 ```python
 from apikeyrotator import APIKeyRotator, AllKeysExhaustedError
 
+rotator = APIKeyRotator(
+    api_keys=["key1", "key2"],
+    enable_metrics=True
+)
+
 try:
-    rotator = APIKeyRotator(api_keys=["key1", "key2"])
     response = rotator.get("https://api.example.com/data")
 except AllKeysExhaustedError:
     print("All keys failed")
+
+# View metrics
+metrics = rotator.get_metrics()
+print(f"Success rate: {metrics['success_rate']:.2%}")
 ```
 
 ---
@@ -248,15 +308,30 @@ Seamlessly cycles through API keys to distribute load and bypass rate limits.
 
 [See rotation strategies](API_REFERENCE.md#rotation-strategies)
 
+### Middleware System
+Powerful request/response interception for caching, logging, and custom processing.
+
+[Explore middleware](MIDDLEWARE.md)
+
 ### Smart Retry Logic
 Exponential backoff and intelligent error classification for resilient requests.
 
 [Understand error handling](ERROR_HANDLING.md)
 
+### Metrics & Monitoring
+Built-in metrics collection with Prometheus export support.
+
+[Learn about metrics](ADVANCED_USAGE.md#metrics-and-monitoring)
+
 ### Anti-Bot Evasion
 User-Agent rotation, random delays, and proxy support to avoid detection.
 
 [Configure anti-bot features](ADVANCED_USAGE.md#anti-bot-evasion)
+
+### Secret Providers
+Load keys from AWS Secrets Manager, GCP Secret Manager, or files.
+
+[See secret providers](ADVANCED_USAGE.md#secret-providers)
 
 ### Intelligent Headers
 Auto-detects authorization patterns and persists successful configurations.
@@ -287,6 +362,11 @@ Process thousands of requests concurrently with async support.
 
 [Learn async patterns](EXAMPLES.md#asynchronous-operations)
 
+### Enterprise Systems
+Production-grade features with secret providers, metrics, and middleware.
+
+[See production patterns](EXAMPLES.md#production-patterns)
+
 ---
 
 ## 🛠️ Configuration
@@ -303,6 +383,9 @@ API_KEYS=key1,key2,key3
 ### Programmatic Setup
 
 ```python
+from apikeyrotator import APIKeyRotator
+from apikeyrotator.middleware import CachingMiddleware
+
 rotator = APIKeyRotator(
     api_keys=["key1", "key2"],
     max_retries=5,
@@ -310,7 +393,10 @@ rotator = APIKeyRotator(
     timeout=10.0,
     user_agents=[...],
     random_delay_range=(1.0, 3.0),
-    proxy_list=[...]
+    proxy_list=[...],
+    middlewares=[CachingMiddleware(ttl=600)],
+    rotation_strategy="health_based",
+    enable_metrics=True
 )
 ```
 
@@ -330,6 +416,9 @@ rotator = APIKeyRotator(
 | Error classification | ❌ Status codes only | ✅ Intelligent   |
 | Anti-bot features    | ❌ Not included      | ✅ Comprehensive |
 | Session management   | ❌ Manual            | ✅ Optimized     |
+| Middleware system    | ❌ Not available     | ✅ Full support  |
+| Metrics collection   | ❌ Custom code       | ✅ Built-in      |
+| Secret providers     | ❌ Manual            | ✅ AWS, GCP, etc |
 
 ---
 
@@ -382,13 +471,27 @@ Recommended reading order:
    - [Getting Started](GETTING_STARTED.md) → [Examples](EXAMPLES.md) → [FAQ](FAQ.md)
 
 2. **Intermediate Users:**
-   - [Advanced Usage](ADVANCED_USAGE.md) → [API Reference](API_REFERENCE.md) → [Error Handling](ERROR_HANDLING.md)
+   - [Middleware Guide](MIDDLEWARE.md) → [Advanced Usage](ADVANCED_USAGE.md) → [API Reference](API_REFERENCE.md)
 
 3. **Advanced Users:**
-   - [API Reference](API_REFERENCE.md) → [Advanced Usage](ADVANCED_USAGE.md) → Source code
+   - [API Reference](API_REFERENCE.md) → [Advanced Usage](ADVANCED_USAGE.md) → [Middleware Guide](MIDDLEWARE.md) → Source code
 
 4. **Troubleshooting:**
    - [FAQ](FAQ.md) → [Error Handling](ERROR_HANDLING.md) → [GitHub Issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
+
+---
+
+## 🆕 What's New in 0.4.3
+
+**Major Features:**
+- 🎯 **Middleware System**: Caching, Logging, Rate Limit, Retry middleware
+- 📊 **Metrics Collection**: Built-in metrics with Prometheus export
+- 🔐 **Secret Providers**: AWS, GCP, File, Environment providers
+- 🔄 **Rotation Strategies**: Round-robin, Random, Weighted, LRU, Health-based
+- 🧵 **Thread Safety**: Full thread-safe implementation
+- 🔧 **Enhanced Error Classification**: More granular error handling
+
+[View complete changelog](../CHANGELOG.md)
 
 ---
 

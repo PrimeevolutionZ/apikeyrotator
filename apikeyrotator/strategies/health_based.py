@@ -1,5 +1,5 @@
 """
-Health-Based стратегия ротации
+Health-Based rotation strategy
 """
 
 import time
@@ -10,15 +10,15 @@ from .base import BaseRotationStrategy, KeyMetrics
 
 class HealthBasedStrategy(BaseRotationStrategy):
     """
-    Стратегия на основе здоровья ключей.
+    Strategy based on key health.
 
-    Выбирает только здоровые ключи (без последовательных ошибок).
-    Нездоровые ключи автоматически исключаются из ротации и периодически
-    проверяются повторно после health_check_interval.
+    Selects only healthy keys (without consecutive failures).
+    Unhealthy keys are automatically excluded from rotation and periodically
+    rechecked after health_check_interval.
 
     Attributes:
-        failure_threshold: Количество последовательных ошибок для пометки ключа как нездорового
-        health_check_interval: Интервал в секундах для повторной проверки нездоровых ключей
+        failure_threshold: Number of consecutive failures to mark a key as unhealthy
+        health_check_interval: Interval in seconds for rechecking unhealthy keys
 
     Example:
         >>> strategy = HealthBasedStrategy(
@@ -26,7 +26,7 @@ class HealthBasedStrategy(BaseRotationStrategy):
         ...     failure_threshold=5,
         ...     health_check_interval=300
         ... )
-        >>> strategy.get_next_key()  # Вернет только здоровый ключ
+        >>> strategy.get_next_key()  # Returns only healthy key
     """
 
     def __init__(
@@ -36,18 +36,18 @@ class HealthBasedStrategy(BaseRotationStrategy):
             health_check_interval: int = 300
     ):
         """
-        Инициализирует стратегию Health-Based.
+        Initializes Health-Based strategy.
 
         Args:
-            keys: Список API ключей
-            failure_threshold: Количество последовательных ошибок для пометки как нездоровый
-            health_check_interval: Время в секундах до повторной проверки нездоровых ключей
+            keys: List of API keys
+            failure_threshold: Number of consecutive failures to mark as unhealthy
+            health_check_interval: Time in seconds before rechecking unhealthy keys
         """
         super().__init__(keys)
         self.failure_threshold = failure_threshold
         self.health_check_interval = health_check_interval
 
-        # Создаем метрики для отслеживания здоровья
+        # Create metrics to track health
         self._key_metrics: Dict[str, KeyMetrics] = {
             key: KeyMetrics(key) for key in keys
         }
@@ -57,24 +57,24 @@ class HealthBasedStrategy(BaseRotationStrategy):
             current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
     ) -> str:
         """
-        Выбирает случайный здоровый ключ.
+        Selects a random healthy key.
 
         Args:
-            current_key_metrics: Текущие метрики ключей из ротатора
+            current_key_metrics: Current key metrics from rotator
 
         Returns:
-            str: Случайный здоровый ключ
+            str: Random healthy key
 
         Raises:
-            Exception: Если нет доступных здоровых ключей
+            Exception: If no healthy keys available
         """
-        # Используем внешние метрики если они предоставлены
+        # Use external metrics if provided
         if current_key_metrics:
             for key, metrics in current_key_metrics.items():
                 if key in self._key_metrics:
                     self._key_metrics[key] = metrics
 
-        # Находим здоровые ключи или те, что готовы к повторной проверке
+        # Find healthy keys or those ready for recheck
         current_time = time.time()
         healthy_keys = [
             k for k, metrics in self._key_metrics.items()
@@ -83,7 +83,7 @@ class HealthBasedStrategy(BaseRotationStrategy):
             )
         ]
 
-        # Если нет здоровых ключей, сбрасываем все как здоровые
+        # If no healthy keys, reset all as healthy
         if not healthy_keys:
             for key in self._key_metrics:
                 self._key_metrics[key].is_healthy = True
@@ -92,7 +92,7 @@ class HealthBasedStrategy(BaseRotationStrategy):
         if not healthy_keys:
             raise Exception("No keys available for rotation.")
 
-        # Выбираем случайный здоровый ключ
+        # Select random healthy key
         key = random.choice(healthy_keys)
         self._key_metrics[key].last_used = time.time()
         return key
@@ -105,21 +105,21 @@ class HealthBasedStrategy(BaseRotationStrategy):
             **kwargs
     ):
         """
-        Обновляет метрики ключа и помечает как нездоровый при превышении порога.
+        Updates key metrics and marks as unhealthy when threshold exceeded.
 
         Args:
-            key: API ключ
-            success: Успешность запроса
-            response_time: Время выполнения
-            **kwargs: Дополнительные параметры
+            key: API key
+            success: Request success
+            response_time: Execution time
+            **kwargs: Additional parameters
         """
         metrics = self._key_metrics.get(key)
         if not metrics:
             return
 
-        # Обновляем базовые метрики
+        # Update base metrics
         metrics.update_from_request(success, response_time, **kwargs)
 
-        # Дополнительная логика здоровья
+        # Additional health logic
         if not success and metrics.consecutive_failures >= self.failure_threshold:
             metrics.is_healthy = False

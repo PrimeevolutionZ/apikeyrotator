@@ -1,4 +1,4 @@
-"""Utils package с утилитами для обработки ошибок, retry и мониторинга"""
+"""Utils package with utilities for error handling, retry and monitoring"""
 
 from .error_classifier import ErrorClassifier, ErrorType
 from .retry import (
