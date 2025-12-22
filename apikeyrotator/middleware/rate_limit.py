@@ -5,6 +5,7 @@ Middleware for rate-limiting management
 import time
 import asyncio
 import logging
+import random
 import threading
 from typing import Dict, Any, Optional
 from .models import RequestInfo, ResponseInfo, ErrorInfo
@@ -31,7 +32,6 @@ class RateLimitMiddleware:
         self.pause_on_limit = pause_on_limit
         self.max_tracked_keys = max(10, max_tracked_keys)
 
-        # FIXED: Logger instead of print
         self.logger = logger if logger else logging.getLogger(__name__)
 
         # Thread-safety
@@ -81,7 +81,7 @@ class RateLimitMiddleware:
         Checks rate limit before request.
         """
         key = request_info.key
-        wait_time = 0.0  # Initialize wait_time
+        wait_time = 0.0
 
         with self._lock:
             # Periodic cleanup (every 50 requests)
@@ -96,6 +96,10 @@ class RateLimitMiddleware:
 
                 if self.pause_on_limit and reset_time > time.time():
                     wait_time = reset_time - time.time()
+
+                    jitter = random.uniform(0, wait_time * 0.1)
+                    wait_time += jitter
+
                     self.logger.warning(
                         f"⏸️ Rate limit for key {key[:4]}****. Waiting {wait_time:.1f}s "
                         f"(remaining={limit_info.get('remaining', '?')})"
@@ -165,7 +169,6 @@ class RateLimitMiddleware:
     async def on_error(self, error_info: ErrorInfo) -> bool:
         """
         Handles 429 (Too Many Requests) errors.
-
         """
         if error_info.response_info and error_info.response_info.status_code == 429:
             key = error_info.request_info.key
@@ -175,13 +178,15 @@ class RateLimitMiddleware:
                 if 'Retry-After' in error_info.response_info.headers:
                     try:
                         retry_after = int(error_info.response_info.headers['Retry-After'])
-                        self.rate_limits[key] = {'reset_time': time.time() + retry_after}
-                        self.logger.info(f"Will retry after {retry_after}s")
+                        jitter = random.uniform(0, retry_after * 0.1)
+                        self.rate_limits[key] = {'reset_time': time.time() + retry_after + jitter}
+                        self.logger.info(f"Will retry after {retry_after + jitter:.1f}s")
                     except ValueError:
-                        self.rate_limits[key] = {'reset_time': time.time() + 60}
+                        jitter = random.uniform(0, 6)  # 0-6 seconds jitter
+                        self.rate_limits[key] = {'reset_time': time.time() + 60 + jitter}
                 else:
-                    # Default: wait 60 seconds
-                    self.rate_limits[key] = {'reset_time': time.time() + 60}
+                    jitter = random.uniform(0, 6)
+                    self.rate_limits[key] = {'reset_time': time.time() + 60 + jitter}
 
             return True
         return False

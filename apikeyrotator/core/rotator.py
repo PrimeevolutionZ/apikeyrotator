@@ -294,6 +294,8 @@ class BaseKeyRotator:
                 )
 
     def _remove_key_safely(self, key: str):
+        # Get strategy name outside the lock first to avoid deadlock
+        strategy_name = None
         with self._keys_lock, self._metrics_lock:
             if key in self.keys:
                 self.keys.remove(key)
@@ -301,9 +303,8 @@ class BaseKeyRotator:
             if key in self._key_metrics:
                 del self._key_metrics[key]
 
-            # Recreate strategy with new key list
-            if self.keys:
-                # Map class types to strategy names
+            # Get strategy name while still holding the lock
+            if self.keys and self.rotation_strategy:
                 from apikeyrotator.strategies import (
                     RoundRobinRotationStrategy,
                     RandomRotationStrategy,
@@ -323,9 +324,11 @@ class BaseKeyRotator:
                 strategy_type = type(self.rotation_strategy)
                 strategy_name = strategy_map.get(strategy_type, 'round_robin')
 
-                self._init_rotation_strategy(strategy_name)
-
             self.logger.warning(f"⚠️ Key {key[:4]}**** removed from rotation. {len(self.keys)} keys remaining.")
+
+        # Recreate strategy with new key list - outside the lock to avoid deadlock
+        if strategy_name:
+            self._init_rotation_strategy(strategy_name)
 
     def reset_key_health(self, key: Optional[str] = None):
         """
@@ -438,22 +441,30 @@ class APIKeyRotator(BaseKeyRotator):
 
     def _run_sync_middleware_before_request(self, request_info: RequestInfo) -> RequestInfo:
         for middleware in self.middlewares:
-            # If middleware is async, log warning
+            # If middleware is async, run it in executor to avoid blocking
             if asyncio.iscoroutinefunction(middleware.before_request):
-                self.logger.warning(f"Skipping async middleware {middleware.__class__.__name__} in sync context")
+                self.logger.warning(f"Running async middleware {middleware.__class__.__name__} synchronously via asyncio.run()")
+                try:
+                    request_info = asyncio.run(middleware.before_request(request_info))
+                except Exception as e:
+                    self.logger.error(f"Error in async middleware {middleware.__class__.__name__}: {e}")
                 continue
             try:
                 # For sync middleware just call
                 request_info = middleware.before_request(request_info)
             except TypeError:
-                # If middleware returns coroutine, skip
+                # If middleware returns coroutine, handle it
                 self.logger.warning(f"Middleware {middleware.__class__.__name__} returned coroutine in sync context")
         return request_info
 
     def _run_sync_middleware_after_request(self, response_info: ResponseInfo) -> ResponseInfo:
         for middleware in self.middlewares:
             if asyncio.iscoroutinefunction(middleware.after_request):
-                self.logger.warning(f"Skipping async middleware {middleware.__class__.__name__} in sync context")
+                self.logger.warning(f"Running async middleware {middleware.__class__.__name__} synchronously via asyncio.run()")
+                try:
+                    response_info = asyncio.run(middleware.after_request(response_info))
+                except Exception as e:
+                    self.logger.error(f"Error in async middleware {middleware.__class__.__name__}: {e}")
                 continue
             try:
                 response_info = middleware.after_request(response_info)
@@ -464,7 +475,12 @@ class APIKeyRotator(BaseKeyRotator):
     def _run_sync_middleware_on_error(self, error_info: ErrorInfo) -> bool:
         for middleware in self.middlewares:
             if asyncio.iscoroutinefunction(middleware.on_error):
-                self.logger.warning(f"Skipping async middleware {middleware.__class__.__name__} in sync context")
+                self.logger.warning(f"Running async middleware {middleware.__class__.__name__} synchronously via asyncio.run()")
+                try:
+                    if asyncio.run(middleware.on_error(error_info)):
+                        return True
+                except Exception as e:
+                    self.logger.error(f"Error in async middleware {middleware.__class__.__name__}: {e}")
                 continue
             try:
                 if middleware.on_error(error_info):
@@ -648,13 +664,24 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
         self.logger.info(f"✅ Async APIKeyRotator initialized")
 
     async def __aenter__(self):
-        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
-        return self
+        try:
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
+            return self
+        except Exception as e:
+            self.logger.error(f"Failed to create aiohttp session in __aenter__: {e}")
+            # Clean up any partial state
+            self._session = None
+            raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._session:
             self.logger.info("Closing aiohttp client session.")
-            await self._session.close()
+            try:
+                await self._session.close()
+            except Exception as e:
+                self.logger.error(f"Error closing aiohttp session: {e}")
+            finally:
+                self._session = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Gets or creates a session"""
@@ -723,11 +750,14 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
             self.logger.debug(f"Received async response with status code: {response_obj.status}")
 
+            # Read content asynchronously before creating ResponseInfo
+            content = await response_obj.read()
+
             # Middleware: after_request
             response_info = ResponseInfo(
                 status_code=response_obj.status,
                 headers=dict(response_obj.headers),
-                content=None,
+                content=content,
                 request_info=request_info
             )
 

@@ -1,5 +1,6 @@
 import asyncio
 import time
+import threading
 from typing import Callable, Any, Type, Union, Tuple
 import requests
 
@@ -193,6 +194,7 @@ class CircuitBreaker:
     """
     Circuit Breaker pattern for preventing cascading failures.
 
+
     Tracks consecutive error count and temporarily
     stops sending requests when threshold is exceeded.
 
@@ -231,39 +233,54 @@ class CircuitBreaker:
         self.last_failure_time = 0
         self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
 
+        # FIXED #3: Add locks for thread-safety
+        self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
+
     def allow_request(self) -> bool:
         """
         Checks if request can be executed.
-
         Returns:
             bool: True if request allowed, False otherwise
         """
-        if self.state == 'CLOSED':
+        with self._state_lock:
+            if self.state == 'CLOSED':
+                return True
+
+            if self.state == 'OPEN':
+                # Check if enough time has passed to transition to HALF_OPEN
+                if time.time() - self.last_failure_time >= self.timeout:
+                    self.state = 'HALF_OPEN'
+                    return True
+                return False
+
+            # HALF_OPEN state
             return True
 
-        if self.state == 'OPEN':
-            # Check if enough time has passed to transition to HALF_OPEN
-            if time.time() - self.last_failure_time >= self.timeout:
-                self.state = 'HALF_OPEN'
-                return True
-            return False
-
-        # HALF_OPEN state
-        return True
-
     def record_success(self):
-        """Records successful request."""
-        self.failures = 0
-        self.state = 'CLOSED'
+        """
+        Records successful request.
+        """
+        with self._lock:
+            self.failures = 0
+        with self._state_lock:
+            self.state = 'CLOSED'
 
     def record_failure(self):
-        """Records failed request."""
-        self.failures += 1
-        self.last_failure_time = time.time()
+        """
+        Records failed request.
+        """
+        with self._lock:
+            self.failures += 1  # Now atomic
+            self.last_failure_time = time.time()
+            current_failures = self.failures
 
-        if self.failures >= self.failure_threshold:
-            self.state = 'OPEN'
-            print(f"⚠️  Circuit breaker opened after {self.failures} failures")
+        # Check threshold outside inner lock to avoid deadlock
+        if current_failures >= self.failure_threshold:
+            with self._state_lock:
+                if self.state != 'OPEN':
+                    self.state = 'OPEN'
+                    print(f"⚠️  Circuit breaker opened after {current_failures} failures")
 
     def get_state(self) -> str:
         """
@@ -272,13 +289,18 @@ class CircuitBreaker:
         Returns:
             str: 'CLOSED', 'OPEN' or 'HALF_OPEN'
         """
-        return self.state
+        with self._state_lock:
+            return self.state
 
     def reset(self):
-        """Resets circuit breaker to initial state."""
-        self.failures = 0
-        self.last_failure_time = 0
-        self.state = 'CLOSED'
+        """
+        Resets circuit breaker to initial state.
+        """
+        with self._lock:
+            self.failures = 0
+            self.last_failure_time = 0
+        with self._state_lock:
+            self.state = 'CLOSED'
 
 
 def measure_time(func: Callable) -> Callable:

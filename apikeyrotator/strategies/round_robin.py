@@ -3,7 +3,6 @@ Round Robin rotation strategy
 """
 
 from typing import List, Dict, Optional
-import threading
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -32,8 +31,6 @@ class RoundRobinRotationStrategy(BaseRotationStrategy):
         """
         super().__init__(keys)
         self._current_index = 0
-        # Separate lock for index to minimize contention
-        self._index_lock = threading.Lock()
 
     def get_next_key(
             self,
@@ -50,6 +47,7 @@ class RoundRobinRotationStrategy(BaseRotationStrategy):
         Raises:
             ValueError: If no keys are available
         """
+        # Use single lock for entire operation to avoid potential deadlock
         with self._lock:
             if not self._keys:
                 raise ValueError("No keys available in rotation")
@@ -61,7 +59,6 @@ class RoundRobinRotationStrategy(BaseRotationStrategy):
                 # Fallback: use all keys if no healthy ones
                 healthy_keys = self._keys.copy()
 
-        with self._index_lock:
             # Ensure index is within list bounds
             self._current_index = self._current_index % len(healthy_keys)
             key = healthy_keys[self._current_index]

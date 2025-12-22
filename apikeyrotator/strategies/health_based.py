@@ -4,6 +4,7 @@ Health-Based rotation strategy
 
 import time
 import random
+import asyncio
 from typing import List, Dict, Optional
 from .base import BaseRotationStrategy, KeyMetrics
 
@@ -58,6 +59,7 @@ class HealthBasedStrategy(BaseRotationStrategy):
     ) -> str:
         """
         Selects a random healthy key.
+        FIXED #10: Staggered recovery instead of all-at-once.
 
         Args:
             current_key_metrics: Current key metrics from rotator
@@ -83,11 +85,18 @@ class HealthBasedStrategy(BaseRotationStrategy):
             )
         ]
 
-        # If no healthy keys, reset all as healthy
         if not healthy_keys:
-            for key in self._key_metrics:
-                self._key_metrics[key].is_healthy = True
-            healthy_keys = list(self._key_metrics.keys())
+            # Instead of marking all as healthy at once, mark one random key
+            # This prevents thundering herd when all keys recover simultaneously
+            all_keys = list(self._key_metrics.keys())
+            if all_keys:
+                # Select random key for recovery
+                recovery_key = random.choice(all_keys)
+                self._key_metrics[recovery_key].is_healthy = True
+                healthy_keys = [recovery_key]
+                self.logger.info(f"Staggered recovery: marking {recovery_key[:4]}**** as healthy")
+            else:
+                raise Exception("No keys available for rotation.")
 
         if not healthy_keys:
             raise Exception("No keys available for rotation.")

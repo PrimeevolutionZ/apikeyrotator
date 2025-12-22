@@ -43,17 +43,18 @@ class ErrorClassifier:
         """
         Classifies errors to decide whether to retry.
 
-        FIXED: More precise logic for 4xx codes:
+         More precise logic for 4xx codes:
         - 408 Request Timeout - TEMPORARY (can retry)
         - 409 Conflict - TEMPORARY (may resolve)
         - 429 Too Many Requests - RATE_LIMIT
+        - 511 Network Authentication Required - TEMPORARY (FIXED #8)
         - 401, 403 - PERMANENT (key issue)
         - 404, 410 - PERMANENT (resource does not exist)
         - Other 4xx - PERMANENT
 
         Classification logic:
         - RATE_LIMIT (429): need to switch key
-        - TEMPORARY (5xx, 408, 409, 503): can retry with the same key
+        - TEMPORARY (5xx, 408, 409, 503, 511): can retry with the same key
         - PERMANENT (401, 403, 404, 410, other 4xx): key is invalid or request is incorrect
         - NETWORK: network/proxy issues, can retry
         - UNKNOWN: unknown error
@@ -120,6 +121,11 @@ class ErrorClassifier:
             # Too Early - server not ready to process request, can retry
             return ErrorType.TEMPORARY
 
+        elif status_code == 511:
+            # Can be temporary if network auth becomes available
+            # (e.g., captive portal, NTLM proxy)
+            return ErrorType.TEMPORARY
+
         elif status_code in [401, 403]:
             # Unauthorized, Forbidden - API key issue
             return ErrorType.PERMANENT
@@ -158,10 +164,6 @@ class ErrorClassifier:
         elif status_code == 507:
             # Insufficient Storage - may be temporary
             return ErrorType.TEMPORARY
-
-        elif status_code == 511:
-            # Network Authentication Required - may need manual intervention
-            return ErrorType.PERMANENT
 
         elif 500 <= status_code < 600:
             # Other 5xx - considered temporary

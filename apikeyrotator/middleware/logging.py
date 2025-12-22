@@ -2,6 +2,7 @@
 Middleware for logging
 """
 import logging
+import time
 from typing import Optional
 from .models import RequestInfo, ResponseInfo, ErrorInfo
 
@@ -17,7 +18,8 @@ class LoggingMiddleware:
         logger: Optional[logging.Logger] = None,
         log_level: int = logging.INFO,
         log_response_time: bool = True,
-        max_key_chars: int = 4
+        max_key_chars: int = 4,
+        max_logs_per_second: int = 1000
     ):
         """
         Args:
@@ -26,12 +28,13 @@ class LoggingMiddleware:
             log_level: Log level (DEBUG, INFO, WARNING, etc.)
             log_response_time: Whether to log request duration
             max_key_chars: Max characters of key to log (for safety)
+            max_logs_per_second: Max log messages per second
         """
         self.verbose = verbose
         self.log_response_time = log_response_time
-        self.max_key_chars = max(0, min(8, max_key_chars))  # Max 8 characters
+        self.max_key_chars = max(0, min(8, max_key_chars))
+        self.max_logs_per_second = max_logs_per_second
 
-        # FIXED: Use real logger
         if logger:
             self.logger = logger
         else:
@@ -46,10 +49,41 @@ class LoggingMiddleware:
 
         self.logger.setLevel(log_level)
 
+        self._last_log_reset = time.time()
+        self._log_count = 0
+        self._dropped_logs = 0
+
         self.logger.info(
             f"LoggingMiddleware initialized: verbose={verbose}, "
-            f"log_response_time={log_response_time}"
+            f"log_response_time={log_response_time}, "
+            f"max_logs_per_second={max_logs_per_second}"
         )
+
+    def _should_log(self) -> bool:
+        """
+
+        Returns:
+            bool: True if we can log
+        """
+        current_time = time.time()
+
+        # Reset counter every second
+        if current_time - self._last_log_reset >= 1.0:
+            if self._dropped_logs > 0:
+                self.logger.warning(
+                    f"⚠️ Dropped {self._dropped_logs} log messages due to rate limiting"
+                )
+            self._last_log_reset = current_time
+            self._log_count = 0
+            self._dropped_logs = 0
+
+        # Check if under limit
+        if self._log_count >= self.max_logs_per_second:
+            self._dropped_logs += 1
+            return False
+
+        self._log_count += 1
+        return True
 
     def _mask_key(self, key: str) -> str:
         """
@@ -88,6 +122,9 @@ class LoggingMiddleware:
         """
         Logs information before sending request.
         """
+        if not self._should_log():
+            return request_info
+
         if self.verbose:
             masked_key = self._mask_key(request_info.key)
             headers_str = self._format_headers(request_info.headers)
@@ -110,6 +147,9 @@ class LoggingMiddleware:
         """
         Logs information after receiving response.
         """
+        if not self._should_log():
+            return response_info
+
         status = response_info.status_code
         url = response_info.request_info.url
 
@@ -148,6 +188,9 @@ class LoggingMiddleware:
         """
         Logs errors.
         """
+        if not self._should_log():
+            return False
+
         exception = error_info.exception
         url = error_info.request_info.url
         masked_key = self._mask_key(error_info.request_info.key)

@@ -1,137 +1,371 @@
-"""
-Middleware for retry logic management
-"""
-
 import asyncio
-import logging
+import time
 import threading
-from typing import Dict, Optional
-from .models import RequestInfo, ResponseInfo, ErrorInfo
+from typing import Callable, Any, Type, Union, Tuple
+import requests
 
 
-class RetryMiddleware:
+def retry_with_backoff(
+        func: Callable,
+        retries: int = 3,
+        backoff_factor: float = 0.5,
+        exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
+) -> Any:
     """
-    Middleware for managing retries.
+    Universal function for retries with exponential backoff.
 
+    Executes a function with automatic retries on exceptions.
+    Delay between attempts increases exponentially.
+
+    Args:
+        func: Function to execute
+        retries: Maximum number of attempts (default 3)
+        backoff_factor: Base delay for exponential growth (default 0.5)
+        exceptions: Exception type(s) to catch (default Exception)
+
+    Returns:
+        Any: Function execution result
+
+    Raises:
+        Exception: Re-raises last exception if all attempts are exhausted
+
+    Examples:
+        >>> # Simple example
+        >>> def flaky_request():
+        ...     return requests.get('https://api.example.com/data')
+        >>> response = retry_with_backoff(flaky_request, retries=5)
+
+        >>> # With specific exceptions
+        >>> response = retry_with_backoff(
+        ...     lambda: requests.get('https://api.example.com'),
+        ...     retries=3,
+        ...     exceptions=requests.RequestException
+        ... )
+
+        >>> # With custom parameters
+        >>> response = retry_with_backoff(
+        ...     func=my_api_call,
+        ...     retries=5,
+        ...     backoff_factor=1.0,  # Start with 1 second
+        ...     exceptions=(ConnectionError, TimeoutError)
+        ... )
+
+    Note:
+        Delay is calculated as: backoff_factor * (2 ** attempt)
+        For example, with backoff_factor=0.5:
+        - Attempt 0: no delay
+        - Attempt 1: 0.5 sec
+        - Attempt 2: 1.0 sec
+        - Attempt 3: 2.0 sec
+        - Attempt 4: 4.0 sec
+    """
+    for attempt in range(retries):
+        try:
+            return func()
+        except exceptions as e:
+            if attempt == retries - 1:
+                # Last attempt - re-raise exception
+                raise e
+
+            delay = backoff_factor * (2 ** attempt)
+            print(f"⚠️  Retry {attempt + 1}/{retries} after {delay:.1f}s delay (error: {type(e).__name__})")
+            time.sleep(delay)
+
+
+async def async_retry_with_backoff(
+        func: Callable,
+        retries: int = 3,
+        backoff_factor: float = 0.5,
+        exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
+) -> Any:
+    """
+    Asynchronous universal function for retries with exponential backoff.
+
+    Executes an async function with automatic retries.
+    Delay between attempts increases exponentially.
+
+    Args:
+        func: Async function to execute (coroutine)
+        retries: Maximum number of attempts (default 3)
+        backoff_factor: Base delay for exponential growth (default 0.5)
+        exceptions: Exception type(s) to catch (default Exception)
+
+    Returns:
+        Any: Function execution result
+
+    Raises:
+        Exception: Re-raises last exception if all attempts are exhausted
+
+    Examples:
+        >>> # Simple example
+        >>> async def flaky_request():
+        ...     async with aiohttp.ClientSession() as session:
+        ...         async with session.get('https://api.example.com') as resp:
+        ...             return await resp.json()
+        >>> response = await async_retry_with_backoff(flaky_request, retries=5)
+
+        >>> # With specific exceptions
+        >>> response = await async_retry_with_backoff(
+        ...     lambda: session.get('https://api.example.com'),
+        ...     retries=3,
+        ...     exceptions=aiohttp.ClientError
+        ... )
+
+        >>> # In async/await context
+        >>> async def main():
+        ...     result = await async_retry_with_backoff(
+        ...         my_async_api_call,
+        ...         retries=5,
+        ...         backoff_factor=1.0
+        ...     )
+        ...     return result
+
+    Note:
+        Uses asyncio.sleep() for non-blocking delay between attempts.
+    """
+    for attempt in range(retries):
+        try:
+            return await func()
+        except exceptions as e:
+            if attempt == retries - 1:
+                # Last attempt - re-raise exception
+                raise e
+
+            delay = backoff_factor * (2 ** attempt)
+            print(f"⚠️  Async Retry {attempt + 1}/{retries} after {delay:.1f}s delay (error: {type(e).__name__})")
+            await asyncio.sleep(delay)
+
+
+def exponential_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
+    """
+    Calculates delay for exponential backoff.
+
+    Args:
+        attempt: Attempt number (starting from 0)
+        base_delay: Base delay in seconds (default 1.0)
+        max_delay: Maximum delay in seconds (default 60.0)
+
+    Returns:
+        float: Delay in seconds
+
+    Examples:
+        >>> for i in range(5):
+        ...     delay = exponential_backoff(i)
+        ...     print(f"Attempt {i}: {delay}s")
+        Attempt 0: 1.0s
+        Attempt 1: 2.0s
+        Attempt 2: 4.0s
+        Attempt 3: 8.0s
+        Attempt 4: 16.0s
+    """
+    delay = base_delay * (2 ** attempt)
+    return min(delay, max_delay)
+
+
+def jittered_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
+    """
+    Calculates delay with added random jitter.
+
+    Adding jitter helps avoid the "thundering herd problem"
+    when many clients retry requests simultaneously.
+
+    Args:
+        attempt: Attempt number (starting from 0)
+        base_delay: Base delay in seconds (default 1.0)
+        max_delay: Maximum delay in seconds (default 60.0)
+
+    Returns:
+        float: Delay in seconds with jitter
+
+    Examples:
+        >>> import random
+        >>> random.seed(42)
+        >>> for i in range(3):
+        ...     delay = jittered_backoff(i)
+        ...     print(f"Attempt {i}: {delay:.2f}s")
+    """
+    import random
+    base = exponential_backoff(attempt, base_delay, max_delay)
+    jitter = random.uniform(0, base * 0.1)  # Add up to 10% random jitter
+    return min(base + jitter, max_delay)
+
+
+class CircuitBreaker:
+    """
+    Circuit Breaker pattern for preventing cascading failures.
+
+
+    Tracks consecutive error count and temporarily
+    stops sending requests when threshold is exceeded.
+
+    States:
+    - CLOSED: Normal operation, requests pass
+    - OPEN: Too many errors, requests blocked
+    - HALF_OPEN: Trial period after recovery
+
+    Example:
+        >>> breaker = CircuitBreaker(failure_threshold=5, timeout=60)
+        >>>
+        >>> def make_request():
+        ...     if breaker.allow_request():
+        ...         try:
+        ...             response = requests.get('https://api.example.com')
+        ...             breaker.record_success()
+        ...             return response
+        ...         except Exception as e:
+        ...             breaker.record_failure()
+        ...             raise
+        ...     else:
+        ...         raise Exception("Circuit breaker is OPEN")
     """
 
-    def __init__(
-        self,
-        max_retries: int = 3,
-        backoff_factor: float = 2.0,
-        max_tracked_urls: int = 1000,
-        logger: Optional[logging.Logger] = None
-    ):
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
         """
+        Initializes Circuit Breaker.
+
         Args:
-            max_retries: Maximum number of retries
-            backoff_factor: Multiplier for exponential backoff
-            max_tracked_urls: Maximum tracked URLs
-            logger: Logger for output messages
+            failure_threshold: Number of errors to open circuit
+            timeout: Time in seconds until transition to HALF_OPEN
         """
-        self.max_retries = max(1, max_retries)
-        self.backoff_factor = max(1.0, backoff_factor)
-        self.max_tracked_urls = max(1, max_tracked_urls)  # Changed minimum from 10 to 1
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failures = 0
+        self.last_failure_time = 0
+        self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
+        self._trial_request_sent = False  # Track if trial request was sent in HALF_OPEN
 
-        self.retry_counts: Dict[str, int] = {}
+        # FIXED #3: Add locks for thread-safety
+        self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
 
-        self.logger = logger if logger else logging.getLogger(__name__)
+    def allow_request(self) -> bool:
+        """
+        Checks if request can be executed.
+        Returns:
+            bool: True if request allowed, False otherwise
+        """
+        with self._state_lock:
+            if self.state == 'CLOSED':
+                return True
 
-        # Thread-safety
-        self._lock = threading.RLock()
-
-        self.logger.info(
-            f"RetryMiddleware initialized: max_retries={max_retries}, "
-            f"backoff_factor={backoff_factor}, max_tracked_urls={max_tracked_urls}"
-        )
-
-    def _cleanup_successful(self, url: str):
-        with self._lock:
-            if url in self.retry_counts:
-                del self.retry_counts[url]
-
-    def _evict_oldest(self):
-        with self._lock:
-            if len(self.retry_counts) >= self.max_tracked_urls:
-                # Remove 10% oldest (with lowest counter)
-                to_remove = max(1, len(self.retry_counts) // 10)
-                sorted_urls = sorted(
-                    self.retry_counts.items(),
-                    key=lambda x: x[1]
-                )
-
-                for url, _ in sorted_urls[:to_remove]:
-                    del self.retry_counts[url]
-
-                self.logger.debug(f"Evicted {to_remove} oldest retry entries")
-
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        """Called before request"""
-        return request_info
-
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        url = response_info.request_info.url
-
-        # Successful request - remove from tracking
-        if 200 <= response_info.status_code < 300:
-            self._cleanup_successful(url)
-
-            with self._lock:
-                if url in self.retry_counts:
-                    retries = self.retry_counts[url]
-                    self.logger.info(
-                        f"✅ Request succeeded after {retries} retries: {url}"
-                    )
-
-        return response_info
-
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        url = error_info.request_info.url
-        wait_time = 0.0
-
-        with self._lock:
-            retry_count = self.retry_counts.get(url, 0)
-
-            if retry_count < self.max_retries:
-                # Only evict if we're adding a NEW url and already at capacity
-                if url not in self.retry_counts:
-                    # When at max size, evict to make room for new URL
-                    while len(self.retry_counts) >= self.max_tracked_urls:
-                        self._evict_oldest()
-
-                self.retry_counts[url] = retry_count + 1
-                wait_time = self.backoff_factor ** retry_count
-
-                self.logger.warning(
-                    f"🔄 Retry {retry_count + 1}/{self.max_retries} for {url} "
-                    f"after {wait_time:.1f}s (error: {type(error_info.exception).__name__})"
-                )
-            else:
-                if url in self.retry_counts:
-                    del self.retry_counts[url]
-
-                self.logger.error(
-                    f"❌ Max retries ({self.max_retries}) exhausted for {url}"
-                )
+            if self.state == 'OPEN':
+                # Check if enough time has passed to transition to HALF_OPEN
+                if time.time() - self.last_failure_time >= self.timeout:
+                    self.state = 'HALF_OPEN'
+                    # Reset trial request flag for new HALF_OPEN state
+                    self._trial_request_sent = False
+                    return True
                 return False
 
-        if wait_time > 0:
-            await asyncio.sleep(wait_time)
+            # HALF_OPEN state - allow only ONE trial request
+            if self.state == 'HALF_OPEN':
+                if not self._trial_request_sent:
+                    self._trial_request_sent = True
+                    return True
+                return False
             return True
 
-        return False
-
-    def get_stats(self) -> Dict[str, any]:
-        """Returns retry statistics"""
+    def record_success(self):
+        """
+        Records successful request.
+        """
         with self._lock:
-            return {
-                "tracked_urls": len(self.retry_counts),
-                "max_tracked_urls": self.max_tracked_urls,
-                "active_retries": sum(1 for count in self.retry_counts.values() if count > 0),
-            }
+            self.failures = 0
+        with self._state_lock:
+            self.state = 'CLOSED'
+            self._trial_request_sent = False  # Reset trial request flag
 
-    def clear_retries(self):
-        """Clears all retry counters"""
+    def record_failure(self):
+        """
+        Records failed request.
+        """
         with self._lock:
-            self.retry_counts.clear()
-        self.logger.info("All retry counters cleared")
+            self.failures += 1  # Now atomic
+            self.last_failure_time = time.time()
+            current_failures = self.failures
+
+        # Check threshold outside inner lock to avoid deadlock
+        if current_failures >= self.failure_threshold:
+            with self._state_lock:
+                if self.state != 'OPEN':
+                    self.state = 'OPEN'
+                    print(f"⚠️  Circuit breaker opened after {current_failures} failures")
+
+    def get_state(self) -> str:
+        """
+        Get current circuit breaker state.
+
+        Returns:
+            str: 'CLOSED', 'OPEN' or 'HALF_OPEN'
+        """
+        with self._state_lock:
+            return self.state
+
+    def reset(self):
+        """
+        Resets circuit breaker to initial state.
+        """
+        with self._lock:
+            self.failures = 0
+            self.last_failure_time = 0
+        with self._state_lock:
+            self.state = 'CLOSED'
+            self._trial_request_sent = False
+
+
+def measure_time(func: Callable) -> Callable:
+    """
+    Decorator for measuring function execution time.
+
+    Args:
+        func: Function to measure
+
+    Returns:
+        Callable: Wrapped function
+
+    Examples:
+        >>> @measure_time
+        ... def slow_function():
+        ...     time.sleep(1)
+        ...     return "done"
+        >>> result = slow_function()
+        ⏱️  slow_function took 1.00s
+    """
+
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        elapsed = time.time() - start
+        print(f"⏱️  {func.__name__} took {elapsed:.2f}s")
+        return result
+
+    return wrapper
+
+
+def measure_time_async(func: Callable) -> Callable:
+    """
+    Decorator for measuring async function execution time.
+
+    Args:
+        func: Async function to measure
+
+    Returns:
+        Callable: Wrapped function
+
+    Examples:
+        >>> @measure_time_async
+        ... async def slow_function():
+        ...     await asyncio.sleep(1)
+        ...     return "done"
+        >>> result = await slow_function()
+        ⏱️  slow_function took 1.00s
+    """
+
+    async def wrapper(*args, **kwargs):
+        start = time.time()
+        result = await func(*args, **kwargs)
+        elapsed = time.time() - start
+        print(f"⏱️  {func.__name__} took {elapsed:.2f}s")
+        return result
+
+    return wrapper
