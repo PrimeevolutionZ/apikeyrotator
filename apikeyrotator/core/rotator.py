@@ -5,8 +5,11 @@ import aiohttp
 import logging
 import random
 import threading
-from typing import List, Optional, Dict, Union, Callable, Tuple
-from contextlib import contextmanager
+from dataclasses import dataclass  # Добавлен недостающий импорт
+from typing import Any, List, Optional, Dict, Union, Callable, Tuple
+from contextlib import asynccontextmanager
+from urllib.parse import urlparse
+
 from .key_parser import parse_keys
 from .exceptions import AllKeysExhaustedError
 from apikeyrotator.utils import async_retry_with_backoff
@@ -29,33 +32,123 @@ try:
 except ImportError:
     _DOTENV_INSTALLED = False
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
 
-def _setup_default_logger():
-    """Sets up the default logger"""
+API_KEY_PATTERNS = {
+    'bearer': ('sk-', 'pk-'),
+    'api_key': 32,
+}
+
+DEFAULT_AUTH_HEADERS = {
+    'bearer': 'Authorization',
+    'api_key': 'X-API-Key',
+}
+
+KEY_LOG_LENGTH = 4
+KEY_LOG_SUFFIX = '****'
+
+
+@dataclass
+class _ResponseCodeWrapper:
+    """Wrapper for status code to simulate response object behavior for classifier"""
+    status_code: int
+    headers: Dict[str, str] = None
+
+    def __init__(self, status_code: int, headers: Dict[str, str] = None):
+        self.status_code = status_code
+        self.headers = headers or {}
+
+
+def _setup_default_logger() -> logging.Logger:
     logger = logging.getLogger(__name__)
     if not logger.handlers:
         handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
     return logger
 
 
-# Simple container for status code instead of MagicMock
-class _StatusCodeWrapper:
-    """Simple object to pass status code without MagicMock"""
+# ============================================================================
+# THREAD-SAFE KEY MANAGER
+# ============================================================================
 
-    def __init__(self, status_code: int):
-        self.status_code = status_code
+class _ThreadSafeKeyManager:
+    """Simplified thread-safe key manager."""
 
+    def __init__(self, keys: List[str], logger: logging.Logger):
+        self._lock = threading.RLock()
+        self._keys = keys.copy()
+        self._key_metrics: Dict[str, KeyMetrics] = {
+            key: KeyMetrics(key) for key in self._keys
+        }
+        self.logger = logger
+
+    def get_keys(self) -> List[str]:
+        with self._lock:
+            return self._keys.copy()
+
+    def get_key_count(self) -> int:
+        with self._lock:
+            return len(self._keys)
+
+    def remove_key(self, key: str) -> bool:
+        with self._lock:
+            if key in self._keys:
+                self._keys.remove(key)
+                if key in self._key_metrics:
+                    del self._key_metrics[key]
+                return True
+            return False
+
+    def get_metrics(self, key: Optional[str] = None) -> Dict[str, Dict]:
+        with self._lock:
+            if key:
+                if key in self._key_metrics:
+                    return {key: self._key_metrics[key].to_dict()}
+                return {}
+            return {k: v.to_dict() for k, v in self._key_metrics.items()}
+
+    def get_metric_objects(self) -> Dict[str, KeyMetrics]:
+        with self._lock:
+            return self._key_metrics.copy()
+
+    def update_metrics(self, key: str, success: bool, response_time: float, is_rate_limited: bool = False) -> None:
+        with self._lock:
+            if key in self._key_metrics:
+                self._key_metrics[key].update_from_request(
+                    success=success,
+                    response_time=response_time,
+                    is_rate_limited=is_rate_limited
+                )
+
+    def reset_health(self, key: Optional[str] = None) -> None:
+        with self._lock:
+            if key:
+                if key in self._key_metrics:
+                    self._key_metrics[key].is_healthy = True
+                    self._key_metrics[key].consecutive_failures = 0
+            else:
+                for metrics in self._key_metrics.values():
+                    metrics.is_healthy = True
+                    metrics.consecutive_failures = 0
+
+    def reinit_keys(self, new_keys: List[str]) -> None:
+        with self._lock:
+            self._keys = new_keys.copy()
+            self._key_metrics = {key: KeyMetrics(key) for key in self._keys}
+
+
+# ============================================================================
+# BASE ROTATOR
+# ============================================================================
 
 class BaseKeyRotator:
-    """
-    Base class for common key rotation logic.
-    Thread-safe version with fixed critical bugs.
-    """
-
     def __init__(
             self,
             api_keys: Optional[Union[List[str], str]] = None,
@@ -78,639 +171,374 @@ class BaseKeyRotator:
             middlewares: Optional[List[RotatorMiddleware]] = None,
             secret_provider: Optional[SecretProvider] = None,
             enable_metrics: bool = True,
-            save_sensitive_headers: bool = False,  # NEW: Disable saving sensitive data by default
+            save_sensitive_headers: bool = False,
     ):
         self.logger = logger if logger else _setup_default_logger()
 
         if load_env_file and _DOTENV_INSTALLED:
-            self.logger.debug("Attempting to load .env file.")
             load_dotenv()
-        elif load_env_file and not _DOTENV_INSTALLED:
-            self.logger.warning("python-dotenv is not installed. Cannot load .env file.")
 
-        # Initialize secret provider
         self.secret_provider = secret_provider
-        if secret_provider:
-            self.logger.info("Using secret provider for key management")
 
-        # Validate and parse keys
-        self.keys = parse_keys(api_keys, env_var, self.logger)
-        if not self.keys:
+        keys = parse_keys(api_keys, env_var, self.logger)
+        if not keys:
             raise ValueError("At least one API key is required")
+
+        self.key_manager = _ThreadSafeKeyManager(keys, self.logger)
 
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.timeout = timeout
         self.should_retry_callback = should_retry_callback
         self.header_callback = header_callback
-        self.user_agents = user_agents if user_agents else []
-        self.current_user_agent_index = 0
-        self.random_delay_range = random_delay_range
-        self.proxy_list = proxy_list if proxy_list else []
-        self.current_proxy_index = 0
         self.config_file = config_file
         self.save_sensitive_headers = save_sensitive_headers
-        self.config_loader = config_loader if config_loader else ConfigLoader(
-            config_file=config_file,
-            logger=self.logger
-        )
+        self.error_classifier = error_classifier or ErrorClassifier()
+        self.random_delay_range = random_delay_range
+        self.user_agents = user_agents or []
+        self._ua_index = 0
+        self.proxy_list = proxy_list or []
+        self._proxy_index = 0
+
+        self.config_loader = config_loader or ConfigLoader(config_file=config_file, logger=self.logger)
         self.config = self.config_loader.load_config()
-        self.error_classifier = error_classifier if error_classifier else ErrorClassifier()
 
-        # Thread-safety: Add locks
-        self._keys_lock = threading.RLock()
-        self._metrics_lock = threading.RLock()
-        self._ua_lock = threading.Lock()
-        self._proxy_lock = threading.Lock()
-        self._config_lock = threading.RLock()
-
-        # Initialize rotation strategy
         self.rotation_strategy_kwargs = rotation_strategy_kwargs or {}
         self._init_rotation_strategy(rotation_strategy)
 
-        # Initialize middleware
-        self.middlewares = middlewares if middlewares else []
-
-        # Initialize metrics
+        self.middlewares = middlewares or []
         self.enable_metrics = enable_metrics
         self.metrics = RotatorMetrics() if enable_metrics else None
 
-        # Use KeyMetrics instead of KeyStats
-        with self._metrics_lock:
-            self._key_metrics: Dict[str, KeyMetrics] = {
-                key: KeyMetrics(key) for key in self.keys
-            }
+        self._log_initialization_summary()
 
-        self.logger.info(
-            f"✅ Rotator initialized with {len(self.keys)} keys. "
-            f"Max retries: {self.max_retries}, Base delay: {self.base_delay}s, "
-            f"Timeout: {self.timeout}s, Strategy: {type(self.rotation_strategy).__name__}"
-        )
-        if self.user_agents:
-            self.logger.info(f"User-Agent rotation enabled with {len(self.user_agents)} agents.")
-        if self.random_delay_range:
-            self.logger.info(f"Random delay enabled: {self.random_delay_range[0]}s - {self.random_delay_range[1]}s.")
-        if self.proxy_list:
-            self.logger.info(f"Proxy rotation enabled with {len(self.proxy_list)} proxies.")
-        if self.middlewares:
-            self.logger.info(f"Loaded {len(self.middlewares)} middleware(s).")
-
-    def _init_rotation_strategy(self, rotation_strategy: Union[str, RotationStrategy, BaseRotationStrategy]):
-        """Initializes the rotation strategy"""
+    def _init_rotation_strategy(self, rotation_strategy: Union[str, RotationStrategy, BaseRotationStrategy]) -> None:
         if isinstance(rotation_strategy, BaseRotationStrategy):
             self.rotation_strategy = rotation_strategy
         else:
-            with self._keys_lock:
-                self.rotation_strategy = create_rotation_strategy(
-                    rotation_strategy,
-                    self.keys.copy(),  # Pass copy for thread-safety
-                    **self.rotation_strategy_kwargs
-                )
-        self.logger.debug(f"Rotation strategy initialized: {type(self.rotation_strategy).__name__}")
+            self.rotation_strategy = create_rotation_strategy(
+                rotation_strategy,
+                self.key_manager.get_keys(),
+                **self.rotation_strategy_kwargs
+            )
+
+    def _log_initialization_summary(self) -> None:
+        self.logger.info(
+            f"✅ Ротатор инициализирован с {self.key_manager.get_key_count()} ключами. "
+            f"Макс попыток: {self.max_retries}, Базовая задержка: {self.base_delay}s, "
+            f"Стратегия: {type(self.rotation_strategy).__name__}"
+        )
+        if self.middlewares:
+            self.logger.info(f"✅ Загружено middleware: {len(self.middlewares)}")
+
+    @property
+    def keys(self) -> List[str]:
+        return self.key_manager.get_keys()
+
+    @keys.setter
+    def keys(self, new_keys: List[str]):
+        self.key_manager.reinit_keys(new_keys)
+        if hasattr(self.rotation_strategy, 'update_keys'):
+            self.rotation_strategy.update_keys(new_keys)
+
+    @property
+    def _key_metrics(self) -> Dict[str, KeyMetrics]:
+        return self.key_manager.get_metric_objects()
+
+    def get_metrics(self) -> Dict:
+        return self.metrics.get_metrics() if self.metrics else {}
+
+    def get_key_statistics(self) -> Dict:
+        return self.key_manager.get_metrics()
+
+    def reset_key_health(self, key: Optional[str] = None):
+        self.key_manager.reset_health(key)
 
     @staticmethod
     def _get_domain_from_url(url: str) -> str:
-        """Extracts domain from URL"""
-        from urllib.parse import urlparse
         try:
-            parsed_url = urlparse(url)
-            return parsed_url.netloc
-        except Exception:
+            return urlparse(url).netloc
+        except (ValueError, AttributeError):
             return ""
 
+    def _infer_auth_header(self, key: str) -> Tuple[str, str]:
+        for prefix in API_KEY_PATTERNS['bearer']:
+            if key.startswith(prefix):
+                return DEFAULT_AUTH_HEADERS['bearer'], f"Bearer {key}"
+        if len(key) == API_KEY_PATTERNS['api_key']:
+            return DEFAULT_AUTH_HEADERS['api_key'], key
+        return DEFAULT_AUTH_HEADERS['bearer'], f"Key {key}"
+
     def get_next_key(self) -> str:
-        """
-        Get the next key according to the rotation strategy.
-        Thread-safe version.
-        """
-        with self._keys_lock, self._metrics_lock:
-            if not self.keys:
-                raise AllKeysExhaustedError("No keys available")
+        keys = self.key_manager.get_keys()
+        if not keys:
+            raise AllKeysExhaustedError("Нет доступных ключей")
 
-            # Pass copy of metrics for safety
-            metrics_copy = {k: v for k, v in self._key_metrics.items() if k in self.keys}
-            key = self.rotation_strategy.get_next_key(metrics_copy)
+        metrics_objects = self.key_manager.get_metric_objects()
+        key = self.rotation_strategy.get_next_key(metrics_objects)
 
-        # Logging without full key (only 4 characters for safety)
-        self.logger.debug(f"Selected key: {key[:4]}****")
+        self.logger.debug(f"Выбран ключ: {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX}")
         return key
 
     def get_next_user_agent(self) -> Optional[str]:
-        """Get the next User-Agent (thread-safe)"""
         if not self.user_agents:
             return None
-        with self._ua_lock:
-            ua = self.user_agents[self.current_user_agent_index]
-            self.current_user_agent_index = (self.current_user_agent_index + 1) % len(self.user_agents)
-        self.logger.debug(f"Using User-Agent: {ua}")
+        ua = self.user_agents[self._ua_index]
+        self._ua_index = (self._ua_index + 1) % len(self.user_agents)
         return ua
 
     def get_next_proxy(self) -> Optional[str]:
-        """Get the next proxy (thread-safe)"""
         if not self.proxy_list:
             return None
-        with self._proxy_lock:
-            proxy = self.proxy_list[self.current_proxy_index]
-            self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
-        self.logger.debug(f"Using proxy: {proxy}")
+        proxy = self.proxy_list[self._proxy_index]
+        self._proxy_index = (self._proxy_index + 1) % len(self.proxy_list)
         return proxy
 
     def _prepare_headers_and_cookies(
-            self,
-            key: str,
-            custom_headers: Optional[dict],
-            url: str
-    ) -> Tuple[dict, dict]:
-        """
-        Prepares headers and cookies with authorization and User-Agent rotation.
-        """
+            self, key: str, custom_headers: Optional[Dict[str, str]], url: str
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
         headers = custom_headers.copy() if custom_headers else {}
         cookies = {}
-
         domain = self._get_domain_from_url(url)
 
-        # Apply saved headers for domain (if enabled)
-        if self.save_sensitive_headers:
-            with self._config_lock:
-                if domain in self.config.get("successful_headers", {}):
-                    self.logger.debug(f"Applying saved headers for domain: {domain}")
-                    saved_headers = self.config["successful_headers"][domain].copy()
-                    # Remove sensitive headers from saved
-                    saved_headers.pop("Authorization", None)
-                    saved_headers.pop("X-API-Key", None)
-                    headers.update(saved_headers)
+        if self.save_sensitive_headers and domain:
+            saved = self.config.get("successful_headers", {}).get(domain, {})
+            safe_headers = {k: v for k, v in saved.items() if k not in ["Authorization", "X-API-Key"]}
+            headers.update(safe_headers)
 
-        # Execute header_callback if provided
         if self.header_callback:
-            self.logger.debug("Executing header_callback.")
             result = self.header_callback(key, custom_headers)
             if isinstance(result, tuple) and len(result) == 2:
                 headers.update(result[0])
                 cookies.update(result[1])
-                self.logger.debug(f"header_callback returned headers and cookies")
             elif isinstance(result, dict):
                 headers.update(result)
-                self.logger.debug(f"header_callback returned headers")
-            else:
-                self.logger.warning("header_callback returned unexpected type.")
 
-        # Automatic authorization header detection
-        if "Authorization" not in headers and not any(h.lower() == "authorization" for h in headers.keys()):
-            if key.startswith("sk-") or key.startswith("pk-"):
-                headers["Authorization"] = f"Bearer {key}"
-                self.logger.debug(f"Inferred Authorization header: Bearer {key[:4]}****")
-            elif len(key) == 32:
-                headers["X-API-Key"] = key
-                self.logger.debug(f"Inferred X-API-Key header: {key[:4]}****")
-            else:
-                headers["Authorization"] = f"Key {key}"
-                self.logger.debug(f"Inferred Authorization header (default): Key {key[:4]}****")
+        if "Authorization" not in headers:
+            header_name, header_value = self._infer_auth_header(key)
+            headers[header_name] = header_value
 
-        # Rotate User-Agent
         user_agent = self.get_next_user_agent()
-        if user_agent and "User-Agent" not in headers and not any(h.lower() == "user-agent" for h in headers.keys()):
+        if user_agent and "User-Agent" not in headers:
             headers["User-Agent"] = user_agent
 
         return headers, cookies
 
-    def _apply_random_delay(self):
-        """Applies random delay with jitter"""
-        if self.random_delay_range:
-            delay = random.uniform(self.random_delay_range[0], self.random_delay_range[1])
-            # Add jitter to avoid thundering herd
-            jitter = random.uniform(0, delay * 0.1)
-            total_delay = delay + jitter
-            self.logger.info(f"⏳ Applying random delay of {total_delay:.2f} seconds.")
-            time.sleep(total_delay)
-
-    def _update_key_metrics(self, key: str, success: bool, response_time: float, is_rate_limited: bool = False):
-        """Updates key metrics (thread-safe)"""
-        with self._metrics_lock:
-            if key in self._key_metrics:
-                self._key_metrics[key].update_from_request(
-                    success=success,
-                    response_time=response_time,
-                    is_rate_limited=is_rate_limited
-                )
-
-    def _remove_key_safely(self, key: str):
-        # Get strategy name outside the lock first to avoid deadlock
-        strategy_name = None
-        with self._keys_lock, self._metrics_lock:
-            if key in self.keys:
-                self.keys.remove(key)
-
-            if key in self._key_metrics:
-                del self._key_metrics[key]
-
-            # Get strategy name while still holding the lock
-            if self.keys and self.rotation_strategy:
-                from apikeyrotator.strategies import (
-                    RoundRobinRotationStrategy,
-                    RandomRotationStrategy,
-                    WeightedRotationStrategy,
-                    LRURotationStrategy,
-                    HealthBasedStrategy
-                )
-
-                strategy_map = {
-                    RoundRobinRotationStrategy: 'round_robin',
-                    RandomRotationStrategy: 'random',
-                    WeightedRotationStrategy: 'weighted',
-                    LRURotationStrategy: 'lru',
-                    HealthBasedStrategy: 'health_based'
-                }
-
-                strategy_type = type(self.rotation_strategy)
-                strategy_name = strategy_map.get(strategy_type, 'round_robin')
-
-            self.logger.warning(f"⚠️ Key {key[:4]}**** removed from rotation. {len(self.keys)} keys remaining.")
-
-        # Recreate strategy with new key list - outside the lock to avoid deadlock
-        if strategy_name:
-            self._init_rotation_strategy(strategy_name)
-
-    def reset_key_health(self, key: Optional[str] = None):
-        """
-        Resets health status of key(s) (thread-safe).
-        """
-        with self._metrics_lock:
-            if key:
-                if key in self._key_metrics:
-                    self._key_metrics[key].is_healthy = True
-                    self._key_metrics[key].consecutive_failures = 0
-                    self.logger.info(f"Reset health for key: {key[:4]}****")
-                else:
-                    self.logger.warning(f"Key {key[:4]}**** not found in metrics")
-            else:
-                for k in self._key_metrics:
-                    self._key_metrics[k].is_healthy = True
-                    self._key_metrics[k].consecutive_failures = 0
-                self.logger.info("Reset health for all keys")
-
-    def get_key_statistics(self) -> Dict[str, Dict]:
-        """
-        Get statistics for all keys (thread-safe).
-        """
-        with self._metrics_lock:
-            return {
-                key: metrics.to_dict()
-                for key, metrics in self._key_metrics.items()
-            }
-
-    def get_metrics(self) -> Optional[Dict]:
-        """
-        Get general rotator metrics.
-        """
-        if self.metrics:
-            return self.metrics.get_metrics()
-        return None
-
-    def export_config(self) -> Dict:
-        """
-        Export current configuration.
-        """
-        with self._keys_lock:
-            return {
-                "keys_count": len(self.keys),
-                "max_retries": self.max_retries,
-                "base_delay": self.base_delay,
-                "timeout": self.timeout,
-                "rotation_strategy": type(self.rotation_strategy).__name__,
-                "user_agents_count": len(self.user_agents),
-                "proxy_count": len(self.proxy_list),
-                "middlewares_count": len(self.middlewares),
-                "enable_metrics": self.enable_metrics,
-                "config_file": self.config_file,
-                "key_statistics": self.get_key_statistics(),
-            }
-
-    async def refresh_keys_from_provider(self):
-        """Refreshes keys from secret provider (thread-safe)"""
-        if not self.secret_provider:
-            self.logger.warning("No secret provider configured")
+    def _apply_random_delay(self) -> None:
+        if not self.random_delay_range:
             return
+        delay = random.uniform(self.random_delay_range[0], self.random_delay_range[1])
+        time.sleep(delay + random.uniform(0, delay * 0.1))
 
-        try:
-            new_keys = await self.secret_provider.refresh_keys()
-            if new_keys:
-                with self._keys_lock, self._metrics_lock:
-                    self.keys = new_keys
-                    self._key_metrics = {key: KeyMetrics(key) for key in self.keys}
-                    self._init_rotation_strategy(self.rotation_strategy)
-                self.logger.info(f"Refreshed {len(new_keys)} keys from secret provider")
-        except Exception as e:
-            self.logger.error(f"Failed to refresh keys from provider: {e}")
+    async def _apply_random_delay_async(self) -> None:
+        if not self.random_delay_range:
+            return
+        delay = random.uniform(self.random_delay_range[0], self.random_delay_range[1])
+        await asyncio.sleep(delay + random.uniform(0, delay * 0.1))
+
+    def _calculate_backoff_delay(self, attempt: int) -> float:
+        delay = self.base_delay * (2 ** attempt)
+        return delay + random.uniform(0, delay * 0.1)
 
     @property
-    def key_count(self):
-        """Number of keys"""
-        with self._keys_lock:
-            return len(self.keys)
+    def key_count(self) -> int:
+        return self.key_manager.get_key_count()
 
-    def __len__(self):
-        return self.key_count
 
-    def __repr__(self):
-        return f"<{self.__class__.__name__} keys={self.key_count} retries={self.max_retries}>"
-
+# ============================================================================
+# SYNC ROTATOR
+# ============================================================================
 
 class APIKeyRotator(BaseKeyRotator):
-    """
-    SYNCHRONOUS API key rotator.
-    """
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=100,
-            pool_maxsize=100,
-            max_retries=0
-        )
+        adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=0)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-        self.logger.info(f"✅ Sync APIKeyRotator initialized with Connection Pooling")
+        self.logger.info("✅ Синхронный ротатор инициализирован с Connection Pooling")
 
-    def _should_retry(self, response: requests.Response) -> bool:
-        """Determines whether to retry the request"""
-        if self.should_retry_callback:
-            return self.should_retry_callback(response)
-        error_type = self.error_classifier.classify_error(response=response)
-        return error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]
-
-    def _run_sync_middleware_before_request(self, request_info: RequestInfo) -> RequestInfo:
-        for middleware in self.middlewares:
-            # If middleware is async, run it in executor to avoid blocking
-            if asyncio.iscoroutinefunction(middleware.before_request):
-                self.logger.warning(f"Running async middleware {middleware.__class__.__name__} synchronously via asyncio.run()")
-                try:
-                    request_info = asyncio.run(middleware.before_request(request_info))
-                except Exception as e:
-                    self.logger.error(f"Error in async middleware {middleware.__class__.__name__}: {e}")
-                continue
-            try:
-                # For sync middleware just call
-                request_info = middleware.before_request(request_info)
-            except TypeError:
-                # If middleware returns coroutine, handle it
-                self.logger.warning(f"Middleware {middleware.__class__.__name__} returned coroutine in sync context")
-        return request_info
-
-    def _run_sync_middleware_after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        for middleware in self.middlewares:
-            if asyncio.iscoroutinefunction(middleware.after_request):
-                self.logger.warning(f"Running async middleware {middleware.__class__.__name__} synchronously via asyncio.run()")
-                try:
-                    response_info = asyncio.run(middleware.after_request(response_info))
-                except Exception as e:
-                    self.logger.error(f"Error in async middleware {middleware.__class__.__name__}: {e}")
-                continue
-            try:
-                response_info = middleware.after_request(response_info)
-            except TypeError:
-                self.logger.warning(f"Middleware {middleware.__class__.__name__} returned coroutine in sync context")
-        return response_info
-
-    def _run_sync_middleware_on_error(self, error_info: ErrorInfo) -> bool:
-        for middleware in self.middlewares:
-            if asyncio.iscoroutinefunction(middleware.on_error):
-                self.logger.warning(f"Running async middleware {middleware.__class__.__name__} synchronously via asyncio.run()")
-                try:
-                    if asyncio.run(middleware.on_error(error_info)):
-                        return True
-                except Exception as e:
-                    self.logger.error(f"Error in async middleware {middleware.__class__.__name__}: {e}")
-                continue
-            try:
-                if middleware.on_error(error_info):
-                    return True
-            except TypeError:
-                self.logger.warning(f"Middleware {middleware.__class__.__name__} returned coroutine in sync context")
-        return False
+    def export_config(self) -> Dict[str, Any]:
+        config = {
+            'keys_count': self.key_manager.get_key_count(),
+            'max_retries': self.max_retries,
+            'base_delay': self.base_delay,
+            'timeout': self.timeout,
+            'strategy': self.rotation_strategy.__class__.__name__,
+            'metrics_enabled': self.metrics is not None,
+        }
+        if self.metrics:
+            config['key_statistics'] = {}
+            for key in self.key_manager.get_keys():
+                key_metrics = self.key_manager.get_metrics(key)
+                if key_metrics:
+                    safe_key = f"{key[:4]}****" if len(key) > 4 else "****"
+                    config['key_statistics'][safe_key] = key_metrics
+        return config
 
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """
-        Executes a request. Just like requests, but with key rotation!
-        """
         if not url or not url.strip():
             raise ValueError("URL cannot be empty")
 
-        self.logger.info(f"Initiating {method} request to {url} with key rotation.")
-
+        self.logger.info(f"Инициирован {method} запрос к {url}")
         domain = self._get_domain_from_url(url)
         start_time = time.time()
 
-        attempt = 0
-        while attempt < self.max_retries:
-            key = self.get_next_key()
+        retry_attempt = 0
+
+        while True:
+            if retry_attempt >= self.max_retries:
+                self.logger.error(f"❌ Все {self.max_retries} попыток исчерпаны")
+                raise AllKeysExhaustedError(f"Все ключи исчерпаны после {self.max_retries} попыток")
+
+            if self.key_count == 0:
+                raise AllKeysExhaustedError("Все ключи невалидны (список пуст)")
+
+            try:
+                key = self.get_next_key()
+            except AllKeysExhaustedError:
+                raise
+
             headers, cookies = self._prepare_headers_and_cookies(key, kwargs.get("headers"), url)
-            kwargs["headers"] = headers
-            kwargs["cookies"] = cookies
-            kwargs["timeout"] = kwargs.get("timeout", self.timeout)
+            request_kwargs = kwargs.copy()
+            request_kwargs["headers"] = headers
+            request_kwargs["cookies"] = cookies
+            request_kwargs["timeout"] = kwargs.get("timeout", self.timeout)
 
             proxy = self.get_next_proxy()
             if proxy:
-                kwargs["proxies"] = {"http": proxy, "https": proxy}
-                self.logger.info(f"🌐 Using proxy: {proxy} for attempt {attempt + 1}/{self.max_retries}.")
+                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
             self._apply_random_delay()
 
-            # Middleware: before_request (sync version)
             request_info = RequestInfo(
-                method=method,
-                url=url,
-                headers=headers,
-                cookies=cookies,
-                key=key,
-                attempt=attempt,
-                kwargs=kwargs
+                method=method, url=url, headers=headers, cookies=cookies,
+                key=key, attempt=retry_attempt, kwargs=request_kwargs
             )
 
-            if self.middlewares:
-                request_info = self._run_sync_middleware_before_request(request_info)
-                kwargs["headers"] = request_info.headers
-                kwargs["cookies"] = request_info.cookies
+            for middleware in self.middlewares:
+                if not asyncio.iscoroutinefunction(middleware.before_request):
+                    request_info = middleware.before_request(request_info)
+                    request_kwargs["headers"] = request_info.headers
+                    request_kwargs["cookies"] = request_info.cookies
 
             try:
-                self.logger.debug(f"Attempt {attempt + 1}/{self.max_retries} with key {key[:4]}****")
-                response_obj = self.session.request(method, url, **kwargs)
+                response = self.session.request(method, url, **request_kwargs)
                 request_time = time.time() - start_time
 
-                self.logger.debug(f"Received response with status code: {response_obj.status_code}")
-
-                # Middleware: after_request (sync version)
                 response_info = ResponseInfo(
-                    status_code=response_obj.status_code,
-                    headers=dict(response_obj.headers),
-                    content=response_obj.content,
-                    request_info=request_info
+                    status_code=response.status_code, headers=dict(response.headers),
+                    content=response.content, request_info=request_info
                 )
+                for middleware in self.middlewares:
+                    if not asyncio.iscoroutinefunction(middleware.after_request):
+                        response_info = middleware.after_request(response_info)
 
-                if self.middlewares:
-                    response_info = self._run_sync_middleware_after_request(response_info)
+                error_type = self.error_classifier.classify_error(response=response)
 
-                error_type = self.error_classifier.classify_error(response=response_obj)
+                is_success = error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT]
+                is_rate_limited = (error_type == ErrorType.RATE_LIMIT)
 
-                # Update metrics
                 if self.metrics:
                     self.metrics.record_request(
-                        key=key,
-                        endpoint=url,
-                        success=(error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT]),
-                        response_time=request_time,
-                        is_rate_limited=(error_type == ErrorType.RATE_LIMIT)
+                        key=key, endpoint=url, success=is_success,
+                        response_time=request_time, is_rate_limited=is_rate_limited
                     )
-
-                # Update key metrics
-                is_rate_limited = (error_type == ErrorType.RATE_LIMIT)
-                success = (error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT])
-                self._update_key_metrics(key, success, request_time, is_rate_limited)
+                self.key_manager.update_metrics(key, is_success, request_time, is_rate_limited)
 
                 if error_type == ErrorType.PERMANENT:
                     self.logger.error(
-                        f"❌ Key {key[:4]}**** is permanently invalid (Status: {response_obj.status_code}).")
-                    self._remove_key_safely(key)
-                    if not self.keys:
-                        raise AllKeysExhaustedError("All keys are permanently invalid.")
-                    # Don't increment attempt counter for invalid keys - try next key immediately
+                        f"❌ Ключ {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX} постоянно невалиден (Status: {response.status_code})")
+                    self.key_manager.remove_key(key)
+                    if hasattr(self.rotation_strategy, 'update_keys'):
+                        self.rotation_strategy.update_keys(self.key_manager.get_keys())
                     continue
-                elif error_type == ErrorType.RATE_LIMIT:
+
+                elif error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]:
+                    retry_attempt += 1
+                    msg = "Rate limited" if error_type == ErrorType.RATE_LIMIT else "Временная ошибка"
                     self.logger.warning(
-                        f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:4]}**** rate limited. Retrying with next key...")
-                elif error_type == ErrorType.TEMPORARY:
-                    self.logger.warning(
-                        f"↻ Attempt {attempt + 1}/{self.max_retries}. Key {key[:4]}**** temporary error. Retrying...")
-                elif not self._should_retry(response_obj):
-                    self.logger.info(f"✅ Request successful with key {key[:4]}**** Status: {response_obj.status_code}")
+                        f"↻ {msg} (Status: {response.status_code}). Попытка {retry_attempt}/{self.max_retries}")
 
-                    # Save NON-sensitive headers if enabled
-                    if self.save_sensitive_headers:
-                        with self._config_lock:
-                            if domain not in self.config.get("successful_headers", {}):
-                                safe_headers = headers.copy()
-                                safe_headers.pop("Authorization", None)
-                                safe_headers.pop("X-API-Key", None)
-                                self.config.setdefault("successful_headers", {})[domain] = safe_headers
-                                self.config_loader.save_config(self.config)
-                                self.logger.debug(f"Saved non-sensitive headers for domain: {domain}")
+                    if retry_attempt < self.max_retries:
+                        delay = self._calculate_backoff_delay(retry_attempt - 1)
+                        time.sleep(delay)
+                        continue
+                    continue
 
-                    return response_obj
+                elif self.should_retry_callback and self.should_retry_callback(response):
+                    retry_attempt += 1
+                    time.sleep(self._calculate_backoff_delay(retry_attempt - 1))
+                    continue
 
-                self.logger.warning(
-                    f"↻ Attempt {attempt + 1}/{self.max_retries}. Retrying...")
+                self.logger.info(f"✅ Успешно (Status: {response.status_code})")
+                return response
 
             except requests.RequestException as e:
-                error_type = self.error_classifier.classify_error(exception=e)
-
-                # Middleware: on_error (sync version)
-                error_info = ErrorInfo(exception=e, request_info=request_info)
-                if self.middlewares:
-                    handled = self._run_sync_middleware_on_error(error_info)
-                    if handled:
-                        self.logger.info(f"Error handled by middleware")
-                        continue
-
-                # Update key metrics on error
                 request_time = time.time() - start_time
-                self._update_key_metrics(key, False, request_time)
+                self.key_manager.update_metrics(key, False, request_time)
+                retry_attempt += 1
+                self.logger.error(f"⚠️ Ошибка сети: {e}. Попытка {retry_attempt}/{self.max_retries}")
+                if retry_attempt < self.max_retries:
+                    time.sleep(self._calculate_backoff_delay(retry_attempt - 1))
+                    continue
 
-                if error_type == ErrorType.NETWORK:
-                    self.logger.error(
-                        f"⚠️ Network error with key {key[:4]}**** on attempt {attempt + 1}/{self.max_retries}: {e}")
-                else:
-                    self.logger.error(
-                        f"⚠️ Request exception with key {key[:4]}**** on attempt {attempt + 1}/{self.max_retries}: {e}")
-
-            # Increment attempt counter
-            attempt += 1
-
-            if attempt < self.max_retries:
-                # FIXED: Exponential backoff with jitter
-                delay = self.base_delay * (2 ** (attempt - 1))
-                jitter = random.uniform(0, delay * 0.1)
-                total_delay = delay + jitter
-                self.logger.info(f"Waiting for {total_delay:.2f} seconds before next attempt.")
-                time.sleep(total_delay)
-
-        self.logger.error(f"❌ All {len(self.keys)} keys exhausted after {self.max_retries} attempts each for {url}.")
-        raise AllKeysExhaustedError(f"All {len(self.keys)} keys exhausted after {self.max_retries} attempts each")
-
-    def get(self, url, **kwargs):
-        """GET request"""
+    def get(self, url: str, **kwargs) -> requests.Response:
         return self.request("GET", url, **kwargs)
 
-    def post(self, url, **kwargs):
-        """POST request"""
+    def post(self, url: str, **kwargs) -> requests.Response:
         return self.request("POST", url, **kwargs)
 
-    def put(self, url, **kwargs):
-        """PUT request"""
+    def put(self, url: str, **kwargs) -> requests.Response:
         return self.request("PUT", url, **kwargs)
 
-    def delete(self, url, **kwargs):
-        """DELETE request"""
+    def delete(self, url: str, **kwargs) -> requests.Response:
         return self.request("DELETE", url, **kwargs)
 
 
-class AsyncAPIKeyRotator(BaseKeyRotator):
-    """
-    ASYNCHRONOUS API key rotator.
-    """
+# ============================================================================
+# ASYNC ROTATOR
+# ============================================================================
 
+class AsyncAPIKeyRotator(BaseKeyRotator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._session: Optional[aiohttp.ClientSession] = None
-        self.logger.info(f"✅ Async APIKeyRotator initialized")
+        self.logger.info("✅ Асинхронный ротатор инициализирован")
 
     async def __aenter__(self):
-        try:
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
-            return self
-        except Exception as e:
-            self.logger.error(f"Failed to create aiohttp session in __aenter__: {e}")
-            # Clean up any partial state
-            self._session = None
-            raise
+        await self._get_session()
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._session:
-            self.logger.info("Closing aiohttp client session.")
-            try:
-                await self._session.close()
-            except Exception as e:
-                self.logger.error(f"Error closing aiohttp session: {e}")
-            finally:
-                self._session = None
+            await self._session.close()
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Gets or creates a session"""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
-            self.logger.debug("Created new aiohttp client session.")
         return self._session
 
-    def _should_retry(self, status: int) -> bool:
-        if self.should_retry_callback:
-            return self.should_retry_callback(status)
-        error_type = self.error_classifier.classify_error(response=_StatusCodeWrapper(status))
-        return error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]
-
     async def request(self, method: str, url: str, **kwargs) -> aiohttp.ClientResponse:
-        """
-        Executes an async request.
-        """
         if not url or not url.strip():
             raise ValueError("URL cannot be empty")
 
-        self.logger.info(f"Initiating async {method} request to {url} with key rotation.")
+        self.logger.info(f"Инициирован async {method} запрос к {url}")
         session = await self._get_session()
-
         domain = self._get_domain_from_url(url)
 
-        async def _perform_single_request_with_key_coroutine():
+        retry_attempt = 0
+
+        while True:
+            if retry_attempt >= self.max_retries:
+                raise AllKeysExhaustedError(f"Все ключи исчерпаны после {self.max_retries} попыток")
+
+            if self.key_count == 0:
+                raise AllKeysExhaustedError("Все ключи невалидны")
+
             key = self.get_next_key()
             headers, cookies = self._prepare_headers_and_cookies(key, kwargs.get("headers"), url)
+
             request_kwargs = kwargs.copy()
             request_kwargs["headers"] = headers
             request_kwargs["cookies"] = cookies
@@ -718,24 +546,12 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
             proxy = self.get_next_proxy()
             if proxy:
                 request_kwargs["proxy"] = proxy
-                self.logger.info(f"🌐 Using proxy: {proxy} for current request.")
 
-            if self.random_delay_range:
-                delay = random.uniform(self.random_delay_range[0], self.random_delay_range[1])
-                jitter = random.uniform(0, delay * 0.1)
-                total_delay = delay + jitter
-                self.logger.info(f"⏳ Applying random delay of {total_delay:.2f} seconds.")
-                await asyncio.sleep(total_delay)
+            await self._apply_random_delay_async()
 
-            # Middleware: before_request
             request_info = RequestInfo(
-                method=method,
-                url=url,
-                headers=headers,
-                cookies=cookies,
-                key=key,
-                attempt=0,
-                kwargs=request_kwargs
+                method=method, url=url, headers=headers, cookies=cookies,
+                key=key, attempt=retry_attempt, kwargs=request_kwargs
             )
 
             for middleware in self.middlewares:
@@ -744,102 +560,79 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                 request_kwargs["cookies"] = request_info.cookies
 
             start_time = time.time()
-            self.logger.debug(f"Performing async request with key {key[:4]}****")
-            response_obj = await session.request(method, url, **request_kwargs)
-            request_time = time.time() - start_time
+            try:
+                response = await session.request(method, url, **request_kwargs)
+                request_time = time.time() - start_time
 
-            self.logger.debug(f"Received async response with status code: {response_obj.status}")
-
-            # Read content asynchronously before creating ResponseInfo
-            content = await response_obj.read()
-
-            # Middleware: after_request
-            response_info = ResponseInfo(
-                status_code=response_obj.status,
-                headers=dict(response_obj.headers),
-                content=content,
-                request_info=request_info
-            )
-
-            for middleware in self.middlewares:
-                response_info = await middleware.after_request(response_info)
-
-            error_type = self.error_classifier.classify_error(response=_StatusCodeWrapper(response_obj.status))
-
-            # Update metrics
-            if self.metrics:
-                self.metrics.record_request(
-                    key=key,
-                    endpoint=url,
-                    success=(error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT]),
-                    response_time=request_time,
-                    is_rate_limited=(error_type == ErrorType.RATE_LIMIT)
+                response_info = ResponseInfo(
+                    status_code=response.status,
+                    headers=dict(response.headers),
+                    content=None,
+                    request_info=request_info
                 )
 
-            # Update key metrics
-            is_rate_limited = (error_type == ErrorType.RATE_LIMIT)
-            success = (error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT])
-            self._update_key_metrics(key, success, request_time, is_rate_limited)
+                for middleware in self.middlewares:
+                    response_info = await middleware.after_request(response_info)
 
-            if error_type == ErrorType.PERMANENT:
-                self.logger.error(
-                    f"❌ Key {key[:4]}**** is permanently invalid (Status: {response_obj.status}).")
-                self._remove_key_safely(key)
-                await response_obj.release()
-                if not self.keys:
-                    raise AllKeysExhaustedError("All keys are permanently invalid.")
-                raise aiohttp.ClientError("Permanent key error, try next key.")
-            elif error_type == ErrorType.RATE_LIMIT:
-                self.logger.warning(
-                    f"↻ Key {key[:4]}**** rate limited (Status: {response_obj.status}).")
-                await response_obj.release()
-                raise aiohttp.ClientError("Rate limit hit, try next key.")
-            elif error_type == ErrorType.TEMPORARY:
-                self.logger.warning(f"↻ Key {key[:4]}**** temporary error (Status: {response_obj.status}).")
-                await response_obj.release()
-                raise aiohttp.ClientError("Temporary error, retry with same key.")
-            elif not self._should_retry(response_obj.status):
-                self.logger.info(f"✅ Async request successful with key {key[:4]}**** Status: {response_obj.status}")
+                error_type = self.error_classifier.classify_error(
+                    response=_ResponseCodeWrapper(response.status, dict(response.headers))
+                )
 
-                # Save NON-sensitive headers
-                if self.save_sensitive_headers:
-                    with self._config_lock:
-                        if domain not in self.config.get("successful_headers", {}):
-                            safe_headers = headers.copy()
-                            safe_headers.pop("Authorization", None)
-                            safe_headers.pop("X-API-Key", None)
-                            self.config.setdefault("successful_headers", {})[domain] = safe_headers
-                            self.config_loader.save_config(self.config)
-                            self.logger.debug(f"Saved non-sensitive headers for domain: {domain}")
+                is_success = error_type not in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY, ErrorType.PERMANENT]
+                is_rate_limited = (error_type == ErrorType.RATE_LIMIT)
 
-                return response_obj
+                if self.metrics:
+                    self.metrics.record_request(
+                        key=key, endpoint=url, success=is_success,
+                        response_time=request_time, is_rate_limited=is_rate_limited
+                    )
+                self.key_manager.update_metrics(key, is_success, request_time, is_rate_limited)
 
-            self.logger.warning(f"↻ Key {key[:4]}**** unexpected error: {response_obj.status}.")
-            await response_obj.release()
-            raise aiohttp.ClientError("Unexpected error, retry.")
+                if error_type == ErrorType.PERMANENT:
+                    self.logger.error(
+                        f"❌ Ключ {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX} постоянно невалиден (Status: {response.status})")
+                    self.key_manager.remove_key(key)
+                    if hasattr(self.rotation_strategy, 'update_keys'):
+                        self.rotation_strategy.update_keys(self.key_manager.get_keys())
+                    response.release()
+                    continue
 
-        # Execute with retry
-        final_response = await async_retry_with_backoff(
-            _perform_single_request_with_key_coroutine,
-            retries=len(self.keys) * self.max_retries,
-            backoff_factor=self.base_delay,
-            exceptions=aiohttp.ClientError
-        )
+                elif error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]:
+                    retry_attempt += 1
+                    response.release()
+                    if retry_attempt < self.max_retries:
+                        delay = self._calculate_backoff_delay(retry_attempt - 1)
+                        self.logger.warning(f"↻ Временная ошибка/RateLimit. Ожидание {delay:.2f}s")
+                        await asyncio.sleep(delay)
+                        continue
+                    continue
 
-        return final_response
+                elif self.should_retry_callback and self.should_retry_callback(response.status):
+                    retry_attempt += 1
+                    response.release()
+                    await asyncio.sleep(self._calculate_backoff_delay(retry_attempt - 1))
+                    continue
 
-    async def get(self, url, **kwargs) -> aiohttp.ClientResponse:
-        """GET request"""
+                self.logger.info(f"✅ Успешно (Status: {response.status})")
+                return response
+
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                request_time = time.time() - start_time
+                self.key_manager.update_metrics(key, False, request_time)
+                retry_attempt += 1
+                self.logger.error(f"⚠️ Async Ошибка сети: {e}")
+                if retry_attempt < self.max_retries:
+                    await asyncio.sleep(self._calculate_backoff_delay(retry_attempt - 1))
+                    continue
+
+    async def get(self, url: str, **kwargs) -> aiohttp.ClientResponse:
         return await self.request("GET", url, **kwargs)
 
-    async def post(self, url, **kwargs) -> aiohttp.ClientResponse:
-        """POST request"""
+    async def post(self, url: str, **kwargs) -> aiohttp.ClientResponse:
         return await self.request("POST", url, **kwargs)
 
-    async def put(self, url, **kwargs) -> aiohttp.ClientResponse:
-        """PUT request"""
+    async def put(self, url: str, **kwargs) -> aiohttp.ClientResponse:
         return await self.request("PUT", url, **kwargs)
 
-    async def delete(self, url, **kwargs) -> aiohttp.ClientResponse:
-        """DELETE request"""
+    async def delete(self, url: str, **kwargs) -> aiohttp.ClientResponse:
         return await self.request("DELETE", url, **kwargs)

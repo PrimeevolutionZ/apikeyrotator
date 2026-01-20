@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional, Union
 from abc import ABC, abstractmethod
 import time
 import threading
-
+import logging
 
 class RotationStrategy(Enum):
     """Enumeration of available rotation strategies"""
@@ -215,6 +215,9 @@ class BaseRotationStrategy(ABC):
 
         # Thread-safety for strategies
         self._lock = threading.RLock()
+
+        # Исправлено: инициализация логгера
+        self.logger = logging.getLogger(__name__)
 
     @abstractmethod
     def get_next_key(

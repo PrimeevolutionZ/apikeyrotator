@@ -4,12 +4,14 @@ Middleware for logging
 import logging
 import time
 from typing import Optional
+from .base import RotatorMiddleware
 from .models import RequestInfo, ResponseInfo, ErrorInfo
 
 
-class LoggingMiddleware:
+class LoggingMiddleware(RotatorMiddleware):
     """
     Middleware for logging requests and responses.
+    Supports both Sync and Async execution.
     """
 
     def __init__(
@@ -21,15 +23,6 @@ class LoggingMiddleware:
         max_key_chars: int = 4,
         max_logs_per_second: int = 1000
     ):
-        """
-        Args:
-            verbose: Detailed logging (including keys and headers)
-            logger: Logger for output. If None, a new one is created
-            log_level: Log level (DEBUG, INFO, WARNING, etc.)
-            log_response_time: Whether to log request duration
-            max_key_chars: Max characters of key to log (for safety)
-            max_logs_per_second: Max log messages per second
-        """
         self.verbose = verbose
         self.log_response_time = log_response_time
         self.max_key_chars = max(0, min(8, max_key_chars))
@@ -53,21 +46,8 @@ class LoggingMiddleware:
         self._log_count = 0
         self._dropped_logs = 0
 
-        self.logger.info(
-            f"LoggingMiddleware initialized: verbose={verbose}, "
-            f"log_response_time={log_response_time}, "
-            f"max_logs_per_second={max_logs_per_second}"
-        )
-
     def _should_log(self) -> bool:
-        """
-
-        Returns:
-            bool: True if we can log
-        """
         current_time = time.time()
-
-        # Reset counter every second
         if current_time - self._last_log_reset >= 1.0:
             if self._dropped_logs > 0:
                 self.logger.warning(
@@ -77,7 +57,6 @@ class LoggingMiddleware:
             self._log_count = 0
             self._dropped_logs = 0
 
-        # Check if under limit
         if self._log_count >= self.max_logs_per_second:
             self._dropped_logs += 1
             return False
@@ -86,74 +65,46 @@ class LoggingMiddleware:
         return True
 
     def _mask_key(self, key: str) -> str:
-        """
-        Args:
-            key: Full API key
-
-        Returns:
-            str: Masked key (e.g. "sk-ab****")
-        """
         if len(key) <= self.max_key_chars:
             return key[:self.max_key_chars] + "****"
         return key[:self.max_key_chars] + "****"
 
     def _format_headers(self, headers: dict) -> str:
-        """
-        Formats headers for logging, hiding sensitive data.
-
-        Args:
-            headers: Headers dict
-
-        Returns:
-            str: Safe headers string
-        """
         safe_headers = {}
         sensitive_keys = ['authorization', 'x-api-key', 'cookie', 'set-cookie']
-
         for key, value in headers.items():
             if key.lower() in sensitive_keys:
                 safe_headers[key] = "[REDACTED]"
             else:
                 safe_headers[key] = value
-
         return str(safe_headers)
 
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        """
-        Logs information before sending request.
-        """
+    # --- Implementation (Common Logic) ---
+
+    def _log_request(self, request_info: RequestInfo):
         if not self._should_log():
-            return request_info
+            return
 
         if self.verbose:
             masked_key = self._mask_key(request_info.key)
             headers_str = self._format_headers(request_info.headers)
-
             self.logger.info(
                 f"📤 {request_info.method} {request_info.url} "
                 f"(key: {masked_key}, attempt: {request_info.attempt + 1})"
             )
-
             self.logger.debug(f"Headers: {headers_str}")
-
             if request_info.kwargs.get('json'):
                 self.logger.debug(f"JSON body: {request_info.kwargs['json']}")
         else:
             self.logger.info(f"📤 {request_info.method} {request_info.url}")
 
-        return request_info
-
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        """
-        Logs information after receiving response.
-        """
+    def _log_response(self, response_info: ResponseInfo):
         if not self._should_log():
-            return response_info
+            return
 
         status = response_info.status_code
         url = response_info.request_info.url
 
-        # Determine log level by status code
         if 200 <= status < 300:
             log_level = logging.INFO
             emoji = "📥 ✅"
@@ -170,26 +121,19 @@ class LoggingMiddleware:
             masked_key = self._mask_key(response_info.request_info.key)
             message += f" (key: {masked_key})"
 
-        # Log response time if available
         if self.log_response_time and hasattr(response_info, 'response_time'):
             message += f" ({response_info.response_time:.3f}s)"
 
         self.logger.log(log_level, message)
 
-        # Detailed response headers logging
         if self.verbose and self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(
                 f"Response headers: {self._format_headers(response_info.headers)}"
             )
 
-        return response_info
-
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        """
-        Logs errors.
-        """
+    def _log_error(self, error_info: ErrorInfo):
         if not self._should_log():
-            return False
+            return
 
         exception = error_info.exception
         url = error_info.request_info.url
@@ -201,10 +145,31 @@ class LoggingMiddleware:
 
         if self.verbose:
             self.logger.error(f"   Key: {masked_key}, Attempt: {error_info.request_info.attempt + 1}")
-
-            # Log traceback only in DEBUG mode
             if self.logger.isEnabledFor(logging.DEBUG):
                 import traceback
                 self.logger.debug(f"Traceback:\n{''.join(traceback.format_tb(exception.__traceback__))}")
 
-        return False  # Do not handle error, only log
+    # --- Sync Hooks ---
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+        self._log_request(request_info)
+        return request_info
+
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
+        self._log_response(response_info)
+        return response_info
+
+    def on_error_sync(self, error_info: ErrorInfo) -> bool:
+        self._log_error(error_info)
+        return False
+
+    # --- Async Hooks (Delegate to Sync logic as logging is blocking anyway or fast enough) ---
+
+    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
+        return self.before_request_sync(request_info)
+
+    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
+        return self.after_request_sync(response_info)
+
+    async def on_error(self, error_info: ErrorInfo) -> bool:
+        return self.on_error_sync(error_info)

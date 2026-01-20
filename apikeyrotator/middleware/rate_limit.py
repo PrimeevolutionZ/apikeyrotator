@@ -76,6 +76,20 @@ class RateLimitMiddleware:
 
             self.logger.debug(f"Evicted {to_remove} oldest rate limit entries")
 
+    def _get_header_nocase(self, headers: Dict[str, str], key: str) -> Optional[str]:
+        """Helper to get header value ignoring case."""
+        if not headers:
+            return None
+        # Direct lookup first (fastest)
+        if key in headers:
+            return headers[key]
+        # Case-insensitive lookup
+        key_lower = key.lower()
+        for k, v in headers.items():
+            if k.lower() == key_lower:
+                return v
+        return None
+
     async def before_request(self, request_info: RequestInfo) -> RequestInfo:
         """
         Checks rate limit before request.
@@ -113,7 +127,7 @@ class RateLimitMiddleware:
 
     async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
         """
-        Extracts rate-limit information from headers.
+        Extracts rate-limit information from headers (Case-Insensitive).
         """
         key = response_info.request_info.key
         headers = response_info.headers
@@ -121,78 +135,121 @@ class RateLimitMiddleware:
         rate_limit_info = {}
 
         # Standard rate-limit headers
-        if 'X-RateLimit-Limit' in headers:
+        limit = self._get_header_nocase(headers, 'X-RateLimit-Limit')
+        if limit:
             try:
-                rate_limit_info['limit'] = int(headers['X-RateLimit-Limit'])
-            except ValueError:
-                pass
-
-        if 'X-RateLimit-Remaining' in headers:
-            try:
-                rate_limit_info['remaining'] = int(headers['X-RateLimit-Remaining'])
-            except ValueError:
-                pass
-
-        if 'X-RateLimit-Reset' in headers:
-            try:
-                rate_limit_info['reset_time'] = int(headers['X-RateLimit-Reset'])
-            except ValueError:
-                pass
-
-        if 'Retry-After' in headers:
-            retry_after = headers['Retry-After']
-            try:
-                if retry_after.isdigit():
-                    rate_limit_info['reset_time'] = time.time() + int(retry_after)
-                else:
-                    # May be HTTP date
-                    from email.utils import parsedate_to_datetime
-                    rate_limit_info['reset_time'] = parsedate_to_datetime(retry_after).timestamp()
+                rate_limit_info['limit'] = int(limit)
             except (ValueError, TypeError):
                 pass
 
+        remaining = self._get_header_nocase(headers, 'X-RateLimit-Remaining')
+        if remaining:
+            try:
+                rate_limit_info['remaining'] = int(remaining)
+            except (ValueError, TypeError):
+                pass
+
+        reset = self._get_header_nocase(headers, 'X-RateLimit-Reset')
+        if reset:
+            try:
+                rate_limit_info['reset_time'] = int(reset)
+            except (ValueError, TypeError):
+                pass
+
+        # Alternative header names (no prefix)
+        if 'limit' not in rate_limit_info:
+            limit = self._get_header_nocase(headers, 'RateLimit-Limit')
+            if limit:
+                try:
+                    rate_limit_info['limit'] = int(limit)
+                except (ValueError, TypeError): pass
+
+        if 'remaining' not in rate_limit_info:
+            remaining = self._get_header_nocase(headers, 'RateLimit-Remaining')
+            if remaining:
+                try:
+                    rate_limit_info['remaining'] = int(remaining)
+                except (ValueError, TypeError): pass
+
+        if 'reset_time' not in rate_limit_info:
+            reset = self._get_header_nocase(headers, 'RateLimit-Reset')
+            if reset:
+                try:
+                    rate_limit_info['reset_time'] = int(reset)
+                except (ValueError, TypeError): pass
+
+        # Store if we found any rate limit info
         if rate_limit_info:
             with self._lock:
-                # Check limit before adding
-                if len(self.rate_limits) >= self.max_tracked_keys:
+                if key not in self.rate_limits:
                     self._evict_oldest()
 
-                self.rate_limits[key] = rate_limit_info
+                # Update existing info or create new
+                if key in self.rate_limits:
+                    self.rate_limits[key].update(rate_limit_info)
+                else:
+                    self.rate_limits[key] = rate_limit_info
 
-                self.logger.debug(
-                    f"Updated rate limit for key {key[:4]}****: "
-                    f"remaining={rate_limit_info.get('remaining', '?')}"
-                )
+            self.logger.debug(
+                f"Updated rate limit for key {key[:4]}****: "
+                f"limit={rate_limit_info.get('limit', '?')}, "
+                f"remaining={rate_limit_info.get('remaining', '?')}"
+            )
 
         return response_info
 
     async def on_error(self, error_info: ErrorInfo) -> bool:
         """
-        Handles 429 (Too Many Requests) errors.
+        Handles rate limit errors (429).
         """
-        if error_info.response_info and error_info.response_info.status_code == 429:
+        if error_info.status_code == 429:
             key = error_info.request_info.key
-            self.logger.warning(f"⚠️ Rate limit (429) hit for key {key[:4]}****")
+            headers = error_info.headers or {}
+
+            # Try to extract Retry-After header
+            retry_after = self._get_header_nocase(headers, 'Retry-After')
+            reset_time = None
+
+            if retry_after:
+                try:
+                    # Retry-After can be seconds or HTTP date
+                    reset_time = time.time() + int(retry_after)
+                except (ValueError, TypeError):
+                    pass
+
+            # Fallback to X-RateLimit-Reset
+            if not reset_time:
+                reset_val = self._get_header_nocase(headers, 'X-RateLimit-Reset')
+                if reset_val:
+                    try:
+                        reset_time = int(reset_val)
+                    except (ValueError, TypeError):
+                        pass
+
+            # Default: wait 60 seconds
+            if not reset_time:
+                reset_time = time.time() + 60
 
             with self._lock:
-                if 'Retry-After' in error_info.response_info.headers:
-                    try:
-                        retry_after = int(error_info.response_info.headers['Retry-After'])
-                        jitter = random.uniform(0, retry_after * 0.1)
-                        self.rate_limits[key] = {'reset_time': time.time() + retry_after + jitter}
-                        self.logger.info(f"Will retry after {retry_after + jitter:.1f}s")
-                    except ValueError:
-                        jitter = random.uniform(0, 6)  # 0-6 seconds jitter
-                        self.rate_limits[key] = {'reset_time': time.time() + 60 + jitter}
-                else:
-                    jitter = random.uniform(0, 6)
-                    self.rate_limits[key] = {'reset_time': time.time() + 60 + jitter}
+                if key not in self.rate_limits:
+                    self._evict_oldest()
 
-            return True
-        return False
+                self.rate_limits[key] = {
+                    'reset_time': reset_time,
+                    'remaining': 0
+                }
+
+            self.logger.warning(
+                f"⚠️ Rate limit hit for key {key[:4]}****. "
+                f"Reset at {reset_time}"
+            )
+
+        return True  # Continue with retry logic
 
     def get_stats(self) -> Dict[str, Any]:
-        """Returns rate-limiting statistics"""
+        """
+        Returns statistics about tracked rate limits.
+        """
         with self._lock:
             active_limits = sum(
                 1 for info in self.rate_limits.values()
@@ -200,13 +257,7 @@ class RateLimitMiddleware:
             )
 
             return {
-                "tracked_keys": len(self.rate_limits),
-                "max_tracked_keys": self.max_tracked_keys,
-                "active_limits": active_limits,
+                'tracked_keys': len(self.rate_limits),
+                'active_limits': active_limits,
+                'max_tracked_keys': self.max_tracked_keys
             }
-
-    def clear_limits(self):
-        """Clears all rate-limit records"""
-        with self._lock:
-            self.rate_limits.clear()
-        self.logger.info("All rate limits cleared")
