@@ -5,7 +5,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.4.3-blue.svg)](https://pypi.org/project/apikeyrotator/)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
 [![Downloads](https://img.shields.io/pypi/dm/apikeyrotator.svg)](https://pypi.org/project/apikeyrotator/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/PrimeevolutionZ/apikeyrotator)
