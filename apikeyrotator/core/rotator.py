@@ -5,7 +5,6 @@ import aiohttp
 import logging
 import random
 import threading
-from dataclasses import dataclass  # Добавлен недостающий импорт
 from typing import Any, List, Optional, Dict, Union, Callable, Tuple
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
@@ -50,11 +49,9 @@ KEY_LOG_LENGTH = 4
 KEY_LOG_SUFFIX = '****'
 
 
-@dataclass
 class _ResponseCodeWrapper:
     """Wrapper for status code to simulate response object behavior for classifier"""
-    status_code: int
-    headers: Dict[str, str] = None
+    __slots__ = ('status_code', 'headers')
 
     def __init__(self, status_code: int, headers: Dict[str, str] = None):
         self.status_code = status_code
@@ -417,8 +414,8 @@ class APIKeyRotator(BaseKeyRotator):
             )
 
             for middleware in self.middlewares:
-                if not asyncio.iscoroutinefunction(middleware.before_request):
-                    request_info = middleware.before_request(request_info)
+                if hasattr(middleware, 'before_request_sync'):
+                    request_info = middleware.before_request_sync(request_info)
                     request_kwargs["headers"] = request_info.headers
                     request_kwargs["cookies"] = request_info.cookies
 
@@ -431,8 +428,8 @@ class APIKeyRotator(BaseKeyRotator):
                     content=response.content, request_info=request_info
                 )
                 for middleware in self.middlewares:
-                    if not asyncio.iscoroutinefunction(middleware.after_request):
-                        response_info = middleware.after_request(response_info)
+                    if hasattr(middleware, 'after_request_sync'):
+                        response_info = middleware.after_request_sync(response_info)
 
                 error_type = self.error_classifier.classify_error(response=response)
 

@@ -3,7 +3,7 @@ Weighted rotation strategy
 """
 
 import random
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -43,16 +43,42 @@ class WeightedRotationStrategy(BaseRotationStrategy):
             current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
     ) -> str:
         """
-        Selects key considering weights.
+        Selects key considering weights, filtering out unhealthy keys.
 
         Args:
-            current_key_metrics: Not used in this strategy
+            current_key_metrics: Current key metrics for health filtering
 
         Returns:
             str: Key selected according to weight coefficients
         """
+        healthy_keys = self._get_healthy_keys(current_key_metrics)
+        healthy_set = set(healthy_keys)
+
+        # Filter weights to only include healthy keys
+        filtered_keys = [k for k in self._keys_list if k in healthy_set]
+        filtered_weights = [w for k, w in zip(self._keys_list, self._weights_list) if k in healthy_set]
+
+        if not filtered_keys:
+            # Fallback: use all keys if no healthy ones
+            filtered_keys = self._keys_list
+            filtered_weights = self._weights_list
+
         return random.choices(
-            self._keys_list,
-            weights=self._weights_list,
+            filtered_keys,
+            weights=filtered_weights,
             k=1
         )[0]
+
+    def update_keys(self, new_keys: List[str]) -> None:
+        """Updates available keys, preserving weights for existing keys."""
+        with self._lock:
+            self._keys = list(new_keys)
+            # Filter weights to only keep existing keys
+            self._keys_list = [k for k in new_keys if k in self._weights]
+            self._weights_list = [self._weights[k] for k in self._keys_list]
+            # Assign default weight 1.0 for any new keys not in original weights
+            for k in new_keys:
+                if k not in self._weights:
+                    self._keys_list.append(k)
+                    self._weights_list.append(1.0)
+                    self._weights[k] = 1.0

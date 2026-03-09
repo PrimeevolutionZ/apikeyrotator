@@ -1,8 +1,11 @@
 import asyncio
+import functools
+import logging
 import time
 import threading
 from typing import Callable, Any, Type, Union, Tuple
-import requests
+
+logger = logging.getLogger(__name__)
 
 
 def retry_with_backoff(
@@ -32,10 +35,12 @@ def retry_with_backoff(
     Examples:
         >>> # Simple example
         >>> def flaky_request():
+        ...     import requests
         ...     return requests.get('https://api.example.com/data')
         >>> response = retry_with_backoff(flaky_request, retries=5)
 
         >>> # With specific exceptions
+        >>> import requests
         >>> response = retry_with_backoff(
         ...     lambda: requests.get('https://api.example.com'),
         ...     retries=3,
@@ -68,7 +73,7 @@ def retry_with_backoff(
                 raise e
 
             delay = backoff_factor * (2 ** attempt)
-            print(f"⚠️  Retry {attempt + 1}/{retries} after {delay:.1f}s delay (error: {type(e).__name__})")
+            logger.warning(f"Retry {attempt + 1}/{retries} after {delay:.1f}s delay (error: {type(e).__name__})")
             time.sleep(delay)
 
 
@@ -132,7 +137,7 @@ async def async_retry_with_backoff(
                 raise e
 
             delay = backoff_factor * (2 ** attempt)
-            print(f"⚠️  Async Retry {attempt + 1}/{retries} after {delay:.1f}s delay (error: {type(e).__name__})")
+            logger.warning(f"Async retry {attempt + 1}/{retries} after {delay:.1f}s delay (error: {type(e).__name__})")
             await asyncio.sleep(delay)
 
 
@@ -194,7 +199,6 @@ class CircuitBreaker:
     """
     Circuit Breaker pattern for preventing cascading failures.
 
-
     Tracks consecutive error count and temporarily
     stops sending requests when threshold is exceeded.
 
@@ -233,7 +237,6 @@ class CircuitBreaker:
         self.last_failure_time = 0
         self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
 
-        # FIXED #3: Add locks for thread-safety
         self._lock = threading.Lock()
         self._state_lock = threading.Lock()
 
@@ -271,7 +274,7 @@ class CircuitBreaker:
         Records failed request.
         """
         with self._lock:
-            self.failures += 1  # Now atomic
+            self.failures += 1
             self.last_failure_time = time.time()
             current_failures = self.failures
 
@@ -280,7 +283,7 @@ class CircuitBreaker:
             with self._state_lock:
                 if self.state != 'OPEN':
                     self.state = 'OPEN'
-                    print(f"⚠️  Circuit breaker opened after {current_failures} failures")
+                    logger.warning(f"Circuit breaker opened after {current_failures} failures")
 
     def get_state(self) -> str:
         """
@@ -319,14 +322,14 @@ def measure_time(func: Callable) -> Callable:
         ...     time.sleep(1)
         ...     return "done"
         >>> result = slow_function()
-        ⏱️  slow_function took 1.00s
     """
 
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         start = time.time()
         result = func(*args, **kwargs)
         elapsed = time.time() - start
-        print(f"⏱️  {func.__name__} took {elapsed:.2f}s")
+        logger.debug(f"{func.__name__} took {elapsed:.2f}s")
         return result
 
     return wrapper
@@ -348,14 +351,14 @@ def measure_time_async(func: Callable) -> Callable:
         ...     await asyncio.sleep(1)
         ...     return "done"
         >>> result = await slow_function()
-        ⏱️  slow_function took 1.00s
     """
 
+    @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         start = time.time()
         result = await func(*args, **kwargs)
         elapsed = time.time() - start
-        print(f"⏱️  {func.__name__} took {elapsed:.2f}s")
+        logger.debug(f"{func.__name__} took {elapsed:.2f}s")
         return result
 
     return wrapper
