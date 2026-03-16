@@ -238,6 +238,16 @@ class BaseRotationStrategy(ABC):
         """
         raise NotImplementedError
 
+    def update_keys(self, new_keys: List[str]) -> None:
+        """
+        Updates the list of available keys (e.g., after key removal).
+
+        Args:
+            new_keys: Updated list of API keys
+        """
+        with self._lock:
+            self._keys = list(new_keys)
+
     def update_key_metrics(
             self,
             key: str,

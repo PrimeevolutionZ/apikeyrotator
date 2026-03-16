@@ -8,10 +8,11 @@ import logging
 import random
 import threading
 from typing import Dict, Any, Optional
+from .base import RotatorMiddleware
 from .models import RequestInfo, ResponseInfo, ErrorInfo
 
 
-class RateLimitMiddleware:
+class RateLimitMiddleware(RotatorMiddleware):
     """
     Middleware for tracking rate limits.
     """
@@ -90,48 +91,8 @@ class RateLimitMiddleware:
                 return v
         return None
 
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        """
-        Checks rate limit before request.
-        """
-        key = request_info.key
-        wait_time = 0.0
-
-        with self._lock:
-            # Periodic cleanup (every 50 requests)
-            self._request_count += 1
-            if self._request_count % 50 == 0:
-                self._cleanup_expired()
-                self._evict_oldest()
-
-            if key in self.rate_limits:
-                limit_info = self.rate_limits[key]
-                reset_time = limit_info.get('reset_time', 0)
-
-                if self.pause_on_limit and reset_time > time.time():
-                    wait_time = reset_time - time.time()
-
-                    jitter = random.uniform(0, wait_time * 0.1)
-                    wait_time += jitter
-
-                    self.logger.warning(
-                        f"⏸️ Rate limit for key {key[:4]}****. Waiting {wait_time:.1f}s "
-                        f"(remaining={limit_info.get('remaining', '?')})"
-                    )
-
-        # Wait outside lock to avoid blocking other requests
-        if wait_time > 0:
-            await asyncio.sleep(wait_time)
-
-        return request_info
-
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        """
-        Extracts rate-limit information from headers (Case-Insensitive).
-        """
-        key = response_info.request_info.key
-        headers = response_info.headers
-
+    def _extract_rate_limit_info(self, headers: Dict[str, str]) -> Dict[str, Any]:
+        """Extract rate limit information from response headers."""
         rate_limit_info = {}
 
         # Standard rate-limit headers
@@ -178,13 +139,15 @@ class RateLimitMiddleware:
                     rate_limit_info['reset_time'] = int(reset)
                 except (ValueError, TypeError): pass
 
-        # Store if we found any rate limit info
+        return rate_limit_info
+
+    def _store_rate_limit_info(self, key: str, rate_limit_info: Dict[str, Any]) -> None:
+        """Store rate limit info for a key."""
         if rate_limit_info:
             with self._lock:
                 if key not in self.rate_limits:
                     self._evict_oldest()
 
-                # Update existing info or create new
                 if key in self.rate_limits:
                     self.rate_limits[key].update(rate_limit_info)
                 else:
@@ -196,15 +159,43 @@ class RateLimitMiddleware:
                 f"remaining={rate_limit_info.get('remaining', '?')}"
             )
 
-        return response_info
+    def _check_rate_limit(self, key: str) -> float:
+        """Check if key is rate-limited and return wait time."""
+        wait_time = 0.0
 
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        """
-        Handles rate limit errors (429).
-        """
-        if error_info.status_code == 429:
+        with self._lock:
+            self._request_count += 1
+            if self._request_count % 50 == 0:
+                self._cleanup_expired()
+                self._evict_oldest()
+
+            if key in self.rate_limits:
+                limit_info = self.rate_limits[key]
+                reset_time = limit_info.get('reset_time', 0)
+
+                if self.pause_on_limit and reset_time > time.time():
+                    wait_time = reset_time - time.time()
+                    jitter = random.uniform(0, wait_time * 0.1)
+                    wait_time += jitter
+
+                    self.logger.warning(
+                        f"⏸️ Rate limit for key {key[:4]}****. Waiting {wait_time:.1f}s "
+                        f"(remaining={limit_info.get('remaining', '?')})"
+                    )
+
+        return wait_time
+
+    def _handle_error(self, error_info: ErrorInfo) -> bool:
+        """Common error handling logic for rate limit errors (429)."""
+        # Extract status code from response_info if available
+        status_code = None
+        headers = {}
+        if error_info.response_info is not None:
+            status_code = error_info.response_info.status_code
+            headers = error_info.response_info.headers or {}
+
+        if status_code == 429:
             key = error_info.request_info.key
-            headers = error_info.headers or {}
 
             # Try to extract Retry-After header
             retry_after = self._get_header_nocase(headers, 'Retry-After')
@@ -212,7 +203,6 @@ class RateLimitMiddleware:
 
             if retry_after:
                 try:
-                    # Retry-After can be seconds or HTTP date
                     reset_time = time.time() + int(retry_after)
                 except (ValueError, TypeError):
                     pass
@@ -244,7 +234,49 @@ class RateLimitMiddleware:
                 f"Reset at {reset_time}"
             )
 
-        return True  # Continue with retry logic
+        return True
+
+    # --- Sync Hooks ---
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+        """Sync hook: checks rate limit before request."""
+        wait_time = self._check_rate_limit(request_info.key)
+        if wait_time > 0:
+            time.sleep(wait_time)
+        return request_info
+
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
+        """Sync hook: extracts rate-limit information from headers."""
+        key = response_info.request_info.key
+        headers = response_info.headers
+        rate_limit_info = self._extract_rate_limit_info(headers)
+        self._store_rate_limit_info(key, rate_limit_info)
+        return response_info
+
+    def on_error_sync(self, error_info: ErrorInfo) -> bool:
+        """Sync hook: handles rate limit errors."""
+        return self._handle_error(error_info)
+
+    # --- Async Hooks ---
+
+    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
+        """Async hook: checks rate limit before request."""
+        wait_time = self._check_rate_limit(request_info.key)
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
+        return request_info
+
+    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
+        """Async hook: extracts rate-limit information from headers."""
+        key = response_info.request_info.key
+        headers = response_info.headers
+        rate_limit_info = self._extract_rate_limit_info(headers)
+        self._store_rate_limit_info(key, rate_limit_info)
+        return response_info
+
+    async def on_error(self, error_info: ErrorInfo) -> bool:
+        """Async hook: handles rate limit errors."""
+        return self._handle_error(error_info)
 
     def get_stats(self) -> Dict[str, Any]:
         """

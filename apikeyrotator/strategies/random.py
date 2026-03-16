@@ -33,12 +33,13 @@ class RandomRotationStrategy(BaseRotationStrategy):
             current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
     ) -> str:
         """
-        Selects a random key.
+        Selects a random key from healthy keys.
 
         Args:
-            current_key_metrics: Not used in this strategy
+            current_key_metrics: Current key metrics for health filtering
 
         Returns:
-            str: Randomly selected key
+            str: Randomly selected healthy key
         """
-        return random.choice(self._keys)
+        healthy_keys = self._get_healthy_keys(current_key_metrics)
+        return random.choice(healthy_keys)

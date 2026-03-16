@@ -132,3 +132,15 @@ class HealthBasedStrategy(BaseRotationStrategy):
         # Additional health logic
         if not success and metrics.consecutive_failures >= self.failure_threshold:
             metrics.is_healthy = False
+
+    def update_keys(self, new_keys: List[str]) -> None:
+        """Updates keys, adding metrics for new keys and removing stale ones."""
+        with self._lock:
+            self._keys = list(new_keys)
+            new_set = set(new_keys)
+            for key in list(self._key_metrics.keys()):
+                if key not in new_set:
+                    del self._key_metrics[key]
+            for key in new_keys:
+                if key not in self._key_metrics:
+                    self._key_metrics[key] = KeyMetrics(key)

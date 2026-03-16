@@ -93,7 +93,7 @@ class AWSSecretsManagerProvider:
 
         try:
             # Run sync boto3 call in executor to avoid blocking event loop
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, retry_with_backoff, _get_secret_value, 3, 1.0, Exception)
         except Exception as e:
             self.logger.error(f"Failed to get keys after retries: {e}")
