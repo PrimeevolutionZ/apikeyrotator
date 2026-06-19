@@ -481,10 +481,11 @@ Recommended reading order:
 
 ---
 
-## 🆕 What's New in 0.4.3
+## 🆕 What's New in 0.6.1
 
 **Major Features:**
-- 🎯 **Middleware System**: Caching, Logging, Rate Limit, Retry middleware
+- 🛣️ **Multi-Provider Routing**: `FallbackRouter` and `ProviderRoute`
+- 🎯 **Middleware System**: Caching, Logging, Rate Limit middleware
 - 📊 **Metrics Collection**: Built-in metrics with Prometheus export
 - 🔐 **Secret Providers**: AWS, GCP, File, Environment providers
 - 🔄 **Rotation Strategies**: Round-robin, Random, Weighted, LRU, Health-based

@@ -13,7 +13,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apikeyrotator"
-version = "0.6.0"
+version = "0.6.1"
 description = "🚀 Powerful and simple API key rotator for bypassing rate limits and handling errors"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -429,10 +429,6 @@ exclude = ["tests*", "docs*", "examples*"]
 
 [project.entry-points."apikeyrotator.providers"]
 # Future secret provider plugin system
-
-[project.scripts]
-# CLI tools if needed in future
-apikeyrotator-cli = "apikeyrotator.cli:main"
 
 
 # ============================================================================

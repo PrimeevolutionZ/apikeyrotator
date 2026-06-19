@@ -1,6 +1,21 @@
 # Changelog
 
 All notable changes to APIKeyRotator will be documented in this file.
+## [0.6.1] - 2026-06-19
+
+### Added
+- **Multi-Provider Routing**: Introduced `FallbackRouter` and `ProviderRoute` to seamlessly fall back between multiple service providers (e.g., OpenAI to Anthropic) with custom payload transformers.
+- **Dynamic Imports**: GCP and AWS secret providers are now imported dynamically to prevent `ImportError` when optional dependencies are missing.
+
+### Fixed
+- **Caching Middleware**: Fixed a bug where `CachingMiddleware` logged cache hits but didn't actually return the cached response. It now properly short-circuits the network request.
+- **Thread Safety**: Fixed thread-safety issues in tests (`test_integration.py`).
+- **Language Consistency**: Translated all core Russian logging messages to English to ensure a globally consistent, professional codebase.
+
+### Removed
+- **RetryMiddleware**: Completely removed because it duplicated the core `BaseKeyRotator`'s exponential backoff, causing $N^2$ redundant requests.
+- **Ghost CLI**: Removed unimplemented `apikeyrotator-cli` from `pyproject.toml`.
+
 ## [0.6.0] - 2026-06-19
 
 ### Fixed

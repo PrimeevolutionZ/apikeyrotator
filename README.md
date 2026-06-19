@@ -7,8 +7,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
-[![Downloads](https://img.shields.io/pypi/dm/apikeyrotator.svg)](https://pypi.org/project/apikeyrotator/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/PrimeevolutionZ/apikeyrotator)
+[![Downloads](https://pepy.tech/badge/apikeyrotator)](https://pepy.tech/project/apikeyrotator)
+[![Tests](https://github.com/PrimeevolutionZ/apikeyrotator/actions/workflows/python-app.yml/badge.svg)](https://github.com/PrimeevolutionZ/apikeyrotator/actions)
 [![Stars](https://img.shields.io/github/stars/PrimeevolutionZ/apikeyrotator?style=social)](https://github.com/PrimeevolutionZ/apikeyrotator)
 
 
@@ -64,6 +64,14 @@
 - Persistent configuration
 
 </td>
+<td>
+
+🛣️ **Multi-Provider Routing**
+- Fallback across different APIs
+- Payload transformers
+- Conditional routing
+
+</td>
 
 
 </table>
@@ -92,6 +100,24 @@ print(response.json())
 # ✅ Rotates keys on rate limits
 # ✅ Retries on failures
 # ✅ Manages headers intelligently
+
+### 🛣️ Multi-Provider Fallback Routing
+
+```python
+from apikeyrotator import FallbackRouter, ProviderRoute, APIKeyRotator
+
+router = FallbackRouter(routes=[
+    ProviderRoute(name="Primary", rotator=APIKeyRotator(api_keys=["key1"])),
+    ProviderRoute(
+        name="Fallback",
+        rotator=APIKeyRotator(api_keys=["key2"]),
+        request_transformer=lambda m, u, k: (m, "https://api.fallback.com/data", k)
+    )
+])
+
+# Automatically falls back to the second API if the first is exhausted!
+response = router.get("https://api.primary.com/data")
+```
 ```
 
 ### 🌟 Using Environment Variables

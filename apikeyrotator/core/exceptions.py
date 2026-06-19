@@ -9,3 +9,7 @@ class NoAPIKeysError(APIKeyError):
 class AllKeysExhaustedError(APIKeyError):
     """All keys are exhausted"""
     pass
+
+class AllProvidersExhaustedError(APIKeyError):
+    """All providers (and their keys) are exhausted"""
+    pass

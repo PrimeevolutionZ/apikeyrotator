@@ -4,10 +4,7 @@ from typing import Union
 from .base import SecretProvider
 from .environment import EnvironmentSecretProvider
 from .file import FileSecretProvider
-from .aws import AWSSecretsManagerProvider
-from .gcp import GCPSecretManagerProvider
-
-
+# Optional providers will be imported dynamically when requested
 def create_secret_provider(provider_type: str, **kwargs) -> SecretProvider:
     """
     Factory function for creating a secret provider.
@@ -47,8 +44,10 @@ def create_secret_provider(provider_type: str, **kwargs) -> SecretProvider:
     elif provider_type == "file":
         return FileSecretProvider(**kwargs)
     elif provider_type in ("aws_secrets_manager", "aws"):
+        from .aws import AWSSecretsManagerProvider
         return AWSSecretsManagerProvider(**kwargs)
     elif provider_type in ("gcp_secret_manager", "gcp"):
+        from .gcp import GCPSecretManagerProvider
         return GCPSecretManagerProvider(**kwargs)
     else:
         raise ValueError(

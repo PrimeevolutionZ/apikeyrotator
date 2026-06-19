@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Union
 import logging
 
 
@@ -11,7 +11,7 @@ class RotatorMiddleware(ABC):
 
     # --- Async methods (for AsyncAPIKeyRotator) ---
 
-    async def before_request(self, request_info: 'RequestInfo') -> 'RequestInfo':
+    async def before_request(self, request_info: 'RequestInfo') -> Union['RequestInfo', 'ResponseInfo']:
         """Async hook before request"""
         return self.before_request_sync(request_info)
 
@@ -25,7 +25,7 @@ class RotatorMiddleware(ABC):
 
     # --- Sync methods (for APIKeyRotator) ---
 
-    def before_request_sync(self, request_info: 'RequestInfo') -> 'RequestInfo':
+    def before_request_sync(self, request_info: 'RequestInfo') -> Union['RequestInfo', 'ResponseInfo']:
         """Sync hook before request"""
         return request_info
 

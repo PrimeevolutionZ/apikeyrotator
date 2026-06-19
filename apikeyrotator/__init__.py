@@ -13,11 +13,15 @@ Easy-to-use yet feature-rich API key rotator with support for:
 from .core import (
     APIKeyRotator,
     AsyncAPIKeyRotator,
+    parse_keys,
+    ConfigLoader,
+)
+
+from .core.exceptions import (
     APIKeyError,
     NoAPIKeysError,
     AllKeysExhaustedError,
-    parse_keys,
-    ConfigLoader,
+    AllProvidersExhaustedError,
 )
 
 # Strategies
@@ -32,6 +36,9 @@ from .strategies import (
     HealthBasedStrategy,
     KeyMetrics,
 )
+
+# Router
+from .router import FallbackRouter, ProviderRoute
 
 # Providers
 from .providers import (
@@ -51,7 +58,6 @@ from .middleware import (
     LoggingMiddleware,
     CachingMiddleware,
     RateLimitMiddleware,
-    RetryMiddleware,
 )
 
 # Metrics
@@ -69,7 +75,7 @@ from .utils import (
     async_retry_with_backoff,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 __author__ = "Prime Evolution"
 
 __all__ = [
@@ -79,6 +85,7 @@ __all__ = [
     "APIKeyError",
     "NoAPIKeysError",
     "AllKeysExhaustedError",
+    "AllProvidersExhaustedError",
     "parse_keys",
     "ConfigLoader",
 
@@ -108,7 +115,10 @@ __all__ = [
     "LoggingMiddleware",
     "CachingMiddleware",
     "RateLimitMiddleware",
-    "RetryMiddleware",
+
+    # Router
+    "FallbackRouter",
+    "ProviderRoute",
 
     # Metrics
     "RotatorMetrics",

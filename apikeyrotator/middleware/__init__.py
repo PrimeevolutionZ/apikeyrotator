@@ -9,7 +9,6 @@ from .models import RequestInfo, ResponseInfo, ErrorInfo
 from .logging import LoggingMiddleware
 from .caching import CachingMiddleware
 from .rate_limit import RateLimitMiddleware
-from .retry import RetryMiddleware
 
 __all__ = [
     "RotatorMiddleware",
@@ -19,5 +18,4 @@ __all__ = [
     "LoggingMiddleware",
     "CachingMiddleware",
     "RateLimitMiddleware",
-    "RetryMiddleware",
 ]

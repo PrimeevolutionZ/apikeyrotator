@@ -473,21 +473,21 @@ class TestConcurrentAccess:
         results = []
 
         def make_request():
-            with patch('requests.Session.request') as mock_request:
-                mock_request.return_value = Mock(status_code=200, headers={}, content=b'')
-                try:
-                    response = rotator.get('http://example.com')
-                    results.append(response.status_code)
-                except Exception as e:
-                    results.append(str(e))
+            try:
+                response = rotator.get('http://example.com')
+                results.append(response.status_code)
+            except Exception as e:
+                results.append(str(e))
 
-        threads = [threading.Thread(target=make_request) for _ in range(10)]
+        with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = Mock(status_code=200, headers={}, content=b'')
+            threads = [threading.Thread(target=make_request) for _ in range(10)]
 
-        for t in threads:
-            t.start()
+            for t in threads:
+                t.start()
 
-        for t in threads:
-            t.join()
+            for t in threads:
+                t.join()
 
         # All requests should succeed
         assert all(r == 200 for r in results if isinstance(r, int))

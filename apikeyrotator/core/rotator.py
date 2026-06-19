@@ -221,12 +221,12 @@ class BaseKeyRotator:
 
     def _log_initialization_summary(self) -> None:
         self.logger.info(
-            f"✅ Ротатор инициализирован с {self.key_manager.get_key_count()} ключами. "
-            f"Макс попыток: {self.max_retries}, Базовая задержка: {self.base_delay}s, "
-            f"Стратегия: {type(self.rotation_strategy).__name__}"
+            f"✅ Rotator initialized with {self.key_manager.get_key_count()} keys. "
+            f"Max retries: {self.max_retries}, Base delay: {self.base_delay}s, "
+            f"Strategy: {type(self.rotation_strategy).__name__}"
         )
         if self.middlewares:
-            self.logger.info(f"✅ Загружено middleware: {len(self.middlewares)}")
+            self.logger.info(f"✅ Middlewares loaded: {len(self.middlewares)}")
 
     @property
     def keys(self) -> List[str]:
@@ -269,12 +269,12 @@ class BaseKeyRotator:
     def get_next_key(self) -> str:
         keys = self.key_manager.get_keys()
         if not keys:
-            raise AllKeysExhaustedError("Нет доступных ключей")
+            raise AllKeysExhaustedError("No valid keys available")
 
         metrics_objects = self.key_manager.get_metric_objects()
         key = self.rotation_strategy.get_next_key(metrics_objects)
 
-        self.logger.debug(f"Выбран ключ: {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX}")
+        self.logger.debug(f"Selected key: {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX}")
         return key
 
     def get_next_user_agent(self) -> Optional[str]:
@@ -353,7 +353,7 @@ class APIKeyRotator(BaseKeyRotator):
         adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=0)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-        self.logger.info("✅ Синхронный ротатор инициализирован с Connection Pooling")
+        self.logger.info("✅ Sync rotator initialized with Connection Pooling")
 
     def export_config(self) -> Dict[str, Any]:
         config = {
@@ -377,7 +377,7 @@ class APIKeyRotator(BaseKeyRotator):
         if not url or not url.strip():
             raise ValueError("URL cannot be empty")
 
-        self.logger.info(f"Инициирован {method} запрос к {url}")
+        self.logger.info(f"Initiating {method} request to {url}")
         domain = self._get_domain_from_url(url)
         start_time = time.time()
 
@@ -385,11 +385,11 @@ class APIKeyRotator(BaseKeyRotator):
 
         while True:
             if retry_attempt >= self.max_retries:
-                self.logger.error(f"❌ Все {self.max_retries} попыток исчерпаны")
-                raise AllKeysExhaustedError(f"Все ключи исчерпаны после {self.max_retries} попыток")
+                self.logger.error(f"❌ All {self.max_retries} retries exhausted")
+                raise AllKeysExhaustedError(f"All keys exhausted after {self.max_retries} attempts")
 
             if self.key_count == 0:
-                raise AllKeysExhaustedError("Все ключи невалидны (список пуст)")
+                raise AllKeysExhaustedError("All keys are invalid (empty list)")
 
             try:
                 key = self.get_next_key()
@@ -415,7 +415,15 @@ class APIKeyRotator(BaseKeyRotator):
 
             for middleware in self.middlewares:
                 if hasattr(middleware, 'before_request_sync'):
-                    request_info = middleware.before_request_sync(request_info)
+                    result = middleware.before_request_sync(request_info)
+                    if isinstance(result, ResponseInfo):
+                        response = requests.Response()
+                        response.status_code = result.status_code
+                        response._content = result.content
+                        if isinstance(result.headers, dict):
+                            response.headers.update(result.headers)
+                        return response
+                    request_info = result
                     request_kwargs["headers"] = request_info.headers
                     request_kwargs["cookies"] = request_info.cookies
 
@@ -445,7 +453,7 @@ class APIKeyRotator(BaseKeyRotator):
 
                 if error_type == ErrorType.PERMANENT:
                     self.logger.error(
-                        f"❌ Ключ {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX} постоянно невалиден (Status: {response.status_code})")
+                        f"❌ Key {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX} permanently invalid (Status: {response.status_code})")
                     self.key_manager.remove_key(key)
                     if hasattr(self.rotation_strategy, 'update_keys'):
                         self.rotation_strategy.update_keys(self.key_manager.get_keys())
@@ -453,9 +461,9 @@ class APIKeyRotator(BaseKeyRotator):
 
                 elif error_type in [ErrorType.RATE_LIMIT, ErrorType.TEMPORARY]:
                     retry_attempt += 1
-                    msg = "Rate limited" if error_type == ErrorType.RATE_LIMIT else "Временная ошибка"
+                    msg = "Rate limited" if error_type == ErrorType.RATE_LIMIT else "Temporary error"
                     self.logger.warning(
-                        f"↻ {msg} (Status: {response.status_code}). Попытка {retry_attempt}/{self.max_retries}")
+                        f"↻ {msg} (Status: {response.status_code}). Attempt {retry_attempt}/{self.max_retries}")
 
                     if retry_attempt < self.max_retries:
                         delay = self._calculate_backoff_delay(retry_attempt - 1)
@@ -468,14 +476,14 @@ class APIKeyRotator(BaseKeyRotator):
                     time.sleep(self._calculate_backoff_delay(retry_attempt - 1))
                     continue
 
-                self.logger.info(f"✅ Успешно (Status: {response.status_code})")
+                self.logger.info(f"✅ Success (Status: {response.status_code})")
                 return response
 
             except requests.RequestException as e:
                 request_time = time.time() - start_time
                 self.key_manager.update_metrics(key, False, request_time)
                 retry_attempt += 1
-                self.logger.error(f"⚠️ Ошибка сети: {e}. Попытка {retry_attempt}/{self.max_retries}")
+                self.logger.error(f"⚠️ Network error: {e}. Attempt {retry_attempt}/{self.max_retries}")
                 if retry_attempt < self.max_retries:
                     time.sleep(self._calculate_backoff_delay(retry_attempt - 1))
                     continue
@@ -501,7 +509,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._session: Optional[aiohttp.ClientSession] = None
-        self.logger.info("✅ Асинхронный ротатор инициализирован")
+        self.logger.info("✅ Async rotator initialized")
 
     async def __aenter__(self):
         await self._get_session()
@@ -520,7 +528,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
         if not url or not url.strip():
             raise ValueError("URL cannot be empty")
 
-        self.logger.info(f"Инициирован async {method} запрос к {url}")
+        self.logger.info(f"Initiating async {method} request to {url}")
         session = await self._get_session()
         domain = self._get_domain_from_url(url)
 
@@ -528,10 +536,10 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
         while True:
             if retry_attempt >= self.max_retries:
-                raise AllKeysExhaustedError(f"Все ключи исчерпаны после {self.max_retries} попыток")
+                raise AllKeysExhaustedError(f"All keys exhausted after {self.max_retries} attempts")
 
             if self.key_count == 0:
-                raise AllKeysExhaustedError("Все ключи невалидны")
+                raise AllKeysExhaustedError("All keys are invalid")
 
             key = self.get_next_key()
             headers, cookies = self._prepare_headers_and_cookies(key, kwargs.get("headers"), url)
@@ -552,9 +560,26 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
             )
 
             for middleware in self.middlewares:
-                request_info = await middleware.before_request(request_info)
-                request_kwargs["headers"] = request_info.headers
-                request_kwargs["cookies"] = request_info.cookies
+                if hasattr(middleware, 'before_request'):
+                    result = await middleware.before_request(request_info)
+                    if isinstance(result, ResponseInfo):
+                        class CachedAsyncResponse:
+                            def __init__(self, status, headers, content):
+                                self.status = status
+                                self.headers = headers
+                                self._content = content if isinstance(content, bytes) else str(content).encode('utf-8')
+                            async def json(self):
+                                import json
+                                return json.loads(self._content)
+                            async def text(self):
+                                return self._content.decode('utf-8')
+                            async def read(self):
+                                return self._content
+                            def release(self): pass
+                        return CachedAsyncResponse(result.status_code, result.headers, result.content)
+                    request_info = result
+                    request_kwargs["headers"] = request_info.headers
+                    request_kwargs["cookies"] = request_info.cookies
 
             start_time = time.time()
             try:
@@ -587,7 +612,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
                 if error_type == ErrorType.PERMANENT:
                     self.logger.error(
-                        f"❌ Ключ {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX} постоянно невалиден (Status: {response.status})")
+                        f"❌ Key {key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX} permanently invalid (Status: {response.status})")
                     self.key_manager.remove_key(key)
                     if hasattr(self.rotation_strategy, 'update_keys'):
                         self.rotation_strategy.update_keys(self.key_manager.get_keys())
@@ -599,7 +624,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                     response.release()
                     if retry_attempt < self.max_retries:
                         delay = self._calculate_backoff_delay(retry_attempt - 1)
-                        self.logger.warning(f"↻ Временная ошибка/RateLimit. Ожидание {delay:.2f}s")
+                        self.logger.warning(f"↻ Temporary error/RateLimit. Waiting {delay:.2f}s")
                         await asyncio.sleep(delay)
                         continue
                     continue
@@ -610,14 +635,14 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                     await asyncio.sleep(self._calculate_backoff_delay(retry_attempt - 1))
                     continue
 
-                self.logger.info(f"✅ Успешно (Status: {response.status})")
+                self.logger.info(f"✅ Success (Status: {response.status})")
                 return response
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 request_time = time.time() - start_time
                 self.key_manager.update_metrics(key, False, request_time)
                 retry_attempt += 1
-                self.logger.error(f"⚠️ Async Ошибка сети: {e}")
+                self.logger.error(f"⚠️ Async Network error: {e}")
                 if retry_attempt < self.max_retries:
                     await asyncio.sleep(self._calculate_backoff_delay(retry_attempt - 1))
                     continue

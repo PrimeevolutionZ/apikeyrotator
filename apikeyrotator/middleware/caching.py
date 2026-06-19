@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from collections import OrderedDict
 from .base import RotatorMiddleware
 from .models import RequestInfo, ResponseInfo, ErrorInfo
@@ -96,7 +96,7 @@ class CachingMiddleware(RotatorMiddleware):
 
     # --- Sync Implementation ---
 
-    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+    def before_request_sync(self, request_info: RequestInfo) -> Union[RequestInfo, ResponseInfo]:
         if self.cache_only_get and request_info.method.upper() != 'GET':
             return request_info
 
@@ -111,8 +111,7 @@ class CachingMiddleware(RotatorMiddleware):
                     self.hits += 1
                     self.cache.move_to_end(cache_key)
                     self.logger.info(f"✅ Cache HIT for {request_info.url}")
-                    # Note: Ideally we would return the response here, but architecture requires return RequestInfo
-                    # Future optimization: allow returning ResponseInfo to skip network
+                    return cached['response']
                 else:
                     del self.cache[cache_key]
                     self.misses += 1
@@ -147,7 +146,7 @@ class CachingMiddleware(RotatorMiddleware):
 
     # --- Async Hooks ---
 
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
+    async def before_request(self, request_info: RequestInfo) -> Union[RequestInfo, ResponseInfo]:
         return self.before_request_sync(request_info)
 
     async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
