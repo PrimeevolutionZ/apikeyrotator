@@ -238,7 +238,6 @@ We recognize and thank security researchers who responsibly disclose vulnerabili
 
 For security-related questions (non-vulnerabilities):
 - **GitHub Discussions**: [Security Category](https://github.com/PrimeevolutionZ/apikeyrotator/discussions)
-- **General Contact**: develop@eclips-team.ru
 
 For security vulnerabilities, always use the private reporting methods described above.
 

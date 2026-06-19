@@ -5,7 +5,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](https://pypi.org/project/apikeyrotator/)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
 [![Downloads](https://img.shields.io/pypi/dm/apikeyrotator.svg)](https://pypi.org/project/apikeyrotator/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/PrimeevolutionZ/apikeyrotator)
@@ -457,7 +457,7 @@ Security is a top priority. Please review our [Security Policy](https://github.c
 - 📜 Security features
 - ✅ Security audit checklist
 
-**Found a security issue?** Please report it privately to develop@eclips-team.ru
+**Found a security issue?** Please report it privately via the internal issue tracker.
 
 ## 📜 License
 
@@ -480,7 +480,6 @@ If you find this project helpful, please consider:
 
 - **GitHub Issues**: [Report bugs](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
 - **GitHub Discussions**: [Ask questions](https://github.com/PrimeevolutionZ/apikeyrotator/discussions)
-- **Email**: develop@eclips-team.ru
 
 ## 🔗 Links
 

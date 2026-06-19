@@ -69,9 +69,8 @@ from .utils import (
     async_retry_with_backoff,
 )
 
-__version__ = "0.4.3"
+__version__ = "0.6.0"
 __author__ = "Prime Evolution"
-__email__ = "develop@eclps-team.ru"
 
 __all__ = [
     # Core

@@ -1,8 +1,23 @@
 # Changelog
 
 All notable changes to APIKeyRotator will be documented in this file.
-## [0.4.3] - Lastes
+## [0.6.0] - 2026-06-19
 
+### Fixed
+- **Code Quality**: Replaced `print()` with standard `logging` module in `utils/retry.py`.
+- **Thread Safety**: Added proper locks (`self._lock`) for key updates in `WeightedRotationStrategy` and `LRURotationStrategy`.
+- **Key Selection Logic**: Updated strategies to correctly filter out unhealthy keys using `_get_healthy_keys()` instead of selecting from the entire pool.
+- **Function Metadata**: Added `@functools.wraps` to decorators to preserve original function signatures and documentation.
+
+### Changed
+- Removed public support email to focus on internal issue tracking.
+- Added `.gitignore` for Python build artifacts.
+
+## [0.5.1] - Previous Release
+
+*(Includes all features and improvements up to 0.5.1)*
+
+## [0.4.3] - Legacy Release
 ### Added
 - **Middleware System**: Comprehensive middleware support for request/response interception
   - `CachingMiddleware`: Response caching with LRU eviction

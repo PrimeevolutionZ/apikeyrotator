@@ -13,16 +13,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apikeyrotator"
-version = "0.5.1"
+version = "0.6.0"
 description = "🚀 Powerful and simple API key rotator for bypassing rate limits and handling errors"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "Prime Evolution", email = "develop@eclips-team.ru"}
+    {name = "Prime Evolution"}
 ]
 maintainers = [
-    {name = "Prime Evolution", email = "develop@eclips-team.ru"}
+    {name = "Prime Evolution"}
 ]
 keywords = [
     "api",

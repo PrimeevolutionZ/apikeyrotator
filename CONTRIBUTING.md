@@ -582,7 +582,6 @@ Significant contributors may be invited to join the maintenance team.
 
 - **Questions**: Use [GitHub Discussions](https://github.com/PrimeevolutionZ/apikeyrotator/discussions)
 - **Chat**: Join our community (link TBD)
-- **Email**: develop@eclips-team.ru
 
 ## 📜 License
 
