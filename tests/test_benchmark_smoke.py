@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+
 BENCH_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'benchmarks'))
 sys.path.insert(0, BENCH_DIR)
 
