@@ -43,11 +43,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.tag.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -129,7 +129,7 @@ jobs:
               --latest="${{ inputs.latest }}"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: steps.tag.outputs.publish == 'true'
         with:
           name: dist
@@ -144,7 +144,7 @@ jobs:
     permissions:
       id-token: write  # trusted publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: dist
           path: dist/

@@ -2,6 +2,12 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
+## [Unreleased]
+
+### CI
+- GitHub Actions updated to their Node 24 versions (`checkout@v5`, `setup-python@v6`, `upload-artifact@v5`, `download-artifact@v5`).
+- The release workflow takes `ref` and `latest` inputs (release any commit, optionally not as the latest release). The tag for 0.8.0 could not be created retroactively: GitHub does not let the workflow token create a tag on a commit whose workflow files differ from the current ones. The 0.8.0 changes are listed below and shipped in 0.8.1+.
+
 ## [0.8.2] - 2026-09-24
 
 Developer-experience release: fewer surprises, clearer errors.
