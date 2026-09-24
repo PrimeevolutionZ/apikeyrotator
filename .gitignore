@@ -12,3 +12,6 @@ build/
 htmlcov/
 *.so
 .env
+
+# Benchmark results (machine-specific)
+benchmarks/results/
