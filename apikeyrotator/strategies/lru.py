@@ -30,9 +30,10 @@ class LRURotationStrategy(BaseRotationStrategy):
             keys: List of API keys for rotation
         """
         super().__init__(keys)
-        # Time each key was last handed out by this strategy (a float per key
-        # instead of a full KeyMetrics object - usage stats live in the rotator)
-        self._last_selected: dict[str, float] = {}
+        # Order in which keys were handed out (a counter, not a timestamp: clocks
+        # can be coarse - ~15 ms on Windows - and ties would hand out one key twice)
+        self._last_selected: dict[str, int] = {}
+        self._sequence = 0
 
     def get_next_key(
             self,
@@ -61,24 +62,25 @@ class LRURotationStrategy(BaseRotationStrategy):
             available = self._key_available
             ext_get = current_key_metrics.get if current_key_metrics else None
 
-            # Single pass: least recently used among available keys,
-            # falling back to the least recently used key overall.
+            # Single pass: least recently handed out among available keys, falling back
+            # to the least recently handed out key overall. Keys never handed out by this
+            # strategy come first (-1), ordered by their last use in the rotator's metrics.
             best_key = best_any = None
-            best_ts = best_any_ts = float('inf')
+            best_rank = best_any_rank = (float('inf'), 0.0)
             for k in self._keys:
-                ts = selected_get(k, 0.0)
                 ext = ext_get(k) if ext_get is not None else None
-                if ext is not None and ext.last_used > ts:
-                    ts = ext.last_used
-                if ts < best_any_ts:
-                    best_any, best_any_ts = k, ts
-                if ts < best_ts and (ext_get is None or available(ext, now, recovery_timeout)):
-                    best_key, best_ts = k, ts
+                seq = selected_get(k)
+                rank = (seq, 0.0) if seq is not None else (-1, ext.last_used if ext is not None else 0.0)
+                if rank < best_any_rank:
+                    best_any, best_any_rank = k, rank
+                if rank < best_rank and (ext_get is None or available(ext, now, recovery_timeout)):
+                    best_key, best_rank = k, rank
             lru_key = best_key if best_key is not None else best_any
 
             # Mark as used in internal state only - external metrics are owned
             # (and updated) by the rotator itself.
-            self._last_selected[lru_key] = now
+            self._sequence += 1
+            self._last_selected[lru_key] = self._sequence
 
         return lru_key
 

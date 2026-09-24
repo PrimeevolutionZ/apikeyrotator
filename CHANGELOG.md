@@ -4,6 +4,9 @@ All notable changes to APIKeyRotator will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **LRU strategy on coarse clocks**: selections were ordered by `time.time()`; where the clock moves in steps (~15 ms on Windows) every selection within a step got the same timestamp and one key received almost all requests (2395 of 2400 in a test). It also let the completion time of a request reorder keys, so concurrent use was not strictly least-recently-used. Selections are now ordered by a counter: exact rotation under any clock and concurrency.
+
 ### Changed
 - `PrometheusExporter.export(rotator)` accepts the rotator itself (the `metrics, key_metrics=` form still works).
 - `UnifiedResponse.json()` raises `json.JSONDecodeError` for bodies that are not JSON in any encoding (it raised `UnicodeDecodeError` for non-UTF-8 bodies).

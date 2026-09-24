@@ -143,3 +143,15 @@ def test_prometheus_export_accepts_the_rotator():
         return [line for line in t.splitlines() if "uptime" not in line]
 
     assert without_uptime(text) == without_uptime(explicit)
+
+
+def test_lru_rotates_even_with_a_coarse_clock():
+    """On Windows time.time() moves in ~15 ms steps; equal timestamps must not pin one key."""
+    rotator = APIKeyRotator(api_keys=[f"key-{i}" for i in range(4)], rotation_strategy="lru")
+    sent = collections.Counter()
+    rotator._transport.request = lambda m, u, kwargs, p, t: (
+        sent.update([kwargs["headers"]["Authorization"][7:]]) or _Resp())
+    with patch("time.time", lambda: 1_800_000_000.0):
+        for _ in range(40):
+            rotator.get("http://x/y")
+    assert set(sent.values()) == {10}
