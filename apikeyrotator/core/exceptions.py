@@ -18,7 +18,13 @@ class AllKeysExhaustedError(APIKeyError):
     Attributes:
         last_response: The last HTTP response received before giving up (if any).
         last_exception: The last network exception raised before giving up (if any).
+        possibly_processed: True if a non-idempotent request (POST/PATCH) was retried
+            after a failure where the server may already have executed it (only happens
+            with an Idempotency-Key or retry_non_idempotent=True). Don't send it anywhere
+            else (FallbackRouter doesn't) - check its outcome first.
     """
+
+    possibly_processed: bool = False
 
     def __init__(
             self,

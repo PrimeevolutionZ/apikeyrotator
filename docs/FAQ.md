@@ -141,8 +141,18 @@ Its subclasses `DeadlineExceededError` (time budget spent) and `CircuitOpenError
 Only when retrying is safe: after `429`, `503`, `408`, `425`, connection failures
 or a rejected key. After `500`/`502`/`504` or a read timeout the server may already
 have executed the request, so the response is returned (or the exception
-re-raised). Send an `Idempotency-Key` header or use `retry_non_idempotent=True` if
-your endpoint is idempotent. `GET`, `PUT`, `DELETE` are always retried.
+re-raised). Send an `Idempotency-Key` header (or set `auto_idempotency_key=True`) if
+the API de-duplicates requests; such retries reuse the same API key. `GET`, `PUT`,
+`DELETE` are always retried.
+
+### Is it safe for payments, orders and webhooks?
+
+Yes - it is built for any API, not only LLMs. A `POST`/`PATCH` is never repeated after
+a failure where it may have been executed, not by retries, not by
+`should_retry_callback`, not by `FallbackRouter`. With idempotency keys the retries
+become safe, keep the same API key, and a final error tells you whether the operation
+may have happened (`AllKeysExhaustedError.possibly_processed`). Details:
+[Payments, orders and other side effects](RESILIENCE.md#payments-orders-and-other-side-effects).
 
 ### Can I use it with any API?
 

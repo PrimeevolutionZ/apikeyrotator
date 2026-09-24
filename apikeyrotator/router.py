@@ -82,7 +82,11 @@ class FallbackRouter:
                 return route.rotator.request(req_method, req_url, **req_kwargs)
             except DeadlineExceededError:
                 raise  # the caller's time budget is spent - don't try other providers
-            except AllKeysExhaustedError:
+            except AllKeysExhaustedError as e:
+                if e.possibly_processed:
+                    # The provider may have executed this POST/PATCH (e.g. a payment) -
+                    # sending it to another provider could do it twice
+                    raise
                 self.logger.warning(f"Provider '{route.name}' exhausted all keys. Moving to next route.")
                 if route.on_exhausted:
                     route.on_exhausted()
@@ -128,7 +132,9 @@ class FallbackRouter:
                 return await route.rotator.request(req_method, req_url, **req_kwargs)
             except DeadlineExceededError:
                 raise  # the caller's time budget is spent - don't try other providers
-            except AllKeysExhaustedError:
+            except AllKeysExhaustedError as e:
+                if e.possibly_processed:
+                    raise  # may have been executed by this provider - see request()
                 self.logger.warning(f"Provider '{route.name}' exhausted all keys. Moving to next route.")
                 if route.on_exhausted:
                     if inspect.iscoroutinefunction(route.on_exhausted):

@@ -38,13 +38,20 @@ come back as NetworkFailure) are thrown into the generator, so its cleanup
 from __future__ import annotations
 import logging
 import time
+import uuid
 from collections.abc import Callable, Generator
 from enum import Enum
 from typing import Any
 
 from apikeyrotator.metrics import RotatorMetrics
 from apikeyrotator.middleware import ErrorInfo, ResponseInfo
-from apikeyrotator.utils import CircuitBreaker, ErrorClassifier, ErrorType, parse_retry_after
+from apikeyrotator.utils import (
+    CircuitBreaker,
+    ErrorClassifier,
+    ErrorType,
+    get_header,
+    parse_retry_after,
+)
 
 from .breakers import BreakerRegistry
 from .exceptions import (
@@ -57,7 +64,7 @@ from .exceptions import (
 from .keys import KeyPool
 from .limits import RateLimiter
 from .middleware_chain import MiddlewareChain
-from .policy import RetryPolicy
+from .policy import NON_IDEMPOTENT_RETRYABLE_STATUSES, RetryPolicy
 from .request_builder import RequestBuilder
 from .responses import StatusView, UnifiedResponse
 from .shared_state import Report, StateSync
@@ -93,6 +100,7 @@ class RequestContext:
     __slots__ = (
         'method', 'url', 'endpoint', 'idempotent', 'deadline', 'attempt',
         'last_response', 'last_exception', 'reports', 'breaker', 'breaker_pending', 'rejected',
+        'unsafe_method', 'possibly_processed', 'pinned_key',
     )
 
     def __init__(self, method: str, url: str, idempotent: bool, deadline: float | None,
@@ -113,6 +121,13 @@ class RequestContext:
         self.breaker_pending = False
         # Keys rejected with 401/403 in this request while auth is not confirmed yet
         self.rejected: dict[str, int] | None = None  # key -> status, in attempt order
+        #: POST/PATCH...: every call may change state on the server
+        self.unsafe_method = False
+        #: An attempt of an unsafe request may have been executed (5xx, read timeout...)
+        self.possibly_processed = False
+        #: Key of that attempt: retries reuse it, because idempotency keys are usually
+        #: scoped to the account of the API key
+        self.pinned_key: str | None = None
 
     def breaker_verdict(self, success: bool) -> None:
         breaker = self.breaker
@@ -194,12 +209,20 @@ class RequestEngine:
         # Native responses hold a connection until released; unified ones don't
         release_native = not unified
 
+        method_upper = method.upper()
+        unsafe_method = policy.is_unsafe_method(method_upper)
+        idempotency_header = policy.idempotency_header
+        if idempotency_header and unsafe_method \
+                and get_header(kwargs.get("headers"), idempotency_header) is None:
+            # One key per logical request, identical on every retry
+            kwargs["headers"] = {**(kwargs.get("headers") or {}), idempotency_header: uuid.uuid4().hex}
         ctx = RequestContext(
             method, url,
-            policy.is_idempotent(method.upper(), kwargs.get("headers")),
+            policy.is_idempotent(method_upper, kwargs.get("headers")),
             policy.deadline(kwargs.pop("total_timeout", policy.total_timeout)),
             self.breakers.for_url(url),
         )
+        ctx.unsafe_method = unsafe_method
         if state.sync_due():
             yield from self._pull_state(offload)
 
@@ -216,6 +239,10 @@ class RequestEngine:
                             else limiter.bucket_wait(key)
                         if wait <= 0:
                             break
+                        if ctx.pinned_key is not None:
+                            # The pinned key must be reused: wait for its own token
+                            yield from self._sleep(ctx, min(wait, policy.max_delay))
+                            continue
                         yield from self._sleep(ctx, limiter.after_bucket_denied(key, wait))
                         if pool.count() == 0:
                             raise AllKeysExhaustedError("All keys are invalid (empty list)")
@@ -307,11 +334,13 @@ class RequestEngine:
                 if ctx.reports:
                     yield from self._flush(ctx, offload)
                 if action is Action.RETRY and ctx.attempt < policy.max_retries:
-                    yield from self._sleep(ctx, self._retry_delay(ctx.attempt - 1, error_type, headers))
+                    yield from self._sleep(ctx, self._retry_delay(ctx, error_type, headers))
         except GeneratorExit:  # driver dropped the flow mid-request - no more effects possible
             ctx.release_breaker()
             raise
-        except BaseException:
+        except BaseException as exc:
+            if ctx.possibly_processed and isinstance(exc, AllKeysExhaustedError):
+                exc.possibly_processed = True
             ctx.release_breaker()
             if ctx.reports:
                 yield from self._flush(ctx, offload)
@@ -466,6 +495,8 @@ class RequestEngine:
                     f"{ctx.method} got {status_code}; not retrying a non-idempotent request "
                     f"(pass retry_non_idempotent=True or an Idempotency-Key header to allow it)")
                 return Action.RETURN, error_type
+            if ctx.unsafe_method and status_code not in NON_IDEMPOTENT_RETRYABLE_STATUSES:
+                self._mark_possibly_processed(ctx, key)
             msg = "Rate limited" if is_rate_limited else "Temporary error"
             self.logger.warning(
                 f"{msg} (Status: {status_code}, key: {mask_key(key)}). "
@@ -474,11 +505,20 @@ class RequestEngine:
 
         callback = policy.should_retry_callback
         if callback and callback(callback_arg):
-            self._record(key, endpoint, False, request_time)
-            self.logger.warning(
-                f"Retry requested by should_retry_callback (Status: {status_code}). "
-                f"Attempt {ctx.attempt + 1}/{policy.max_retries}")
-            return Action.RETRY, None
+            if ctx.unsafe_method and not ctx.idempotent:
+                # The server answered, so it executed this POST/PATCH - a retry would repeat it
+                self.logger.warning(
+                    f"should_retry_callback asked to retry {ctx.method} (status {status_code}); "
+                    f"not retrying a non-idempotent request (send an Idempotency-Key header, "
+                    f"auto_idempotency_key=True or retry_non_idempotent=True to allow it)")
+            else:
+                if ctx.unsafe_method:
+                    self._mark_possibly_processed(ctx, key)
+                self._record(key, endpoint, False, request_time)
+                self.logger.warning(
+                    f"Retry requested by should_retry_callback (Status: {status_code}). "
+                    f"Attempt {ctx.attempt + 1}/{policy.max_retries}")
+                return Action.RETRY, None
 
         self._record(key, endpoint, True, request_time)
         if not self.pool.auth_confirmed:
@@ -488,7 +528,15 @@ class RequestEngine:
             self.logger.debug("Success (Status: %s)", status_code)
         return Action.RETURN, None
 
+    def _mark_possibly_processed(self, ctx: RequestContext, key: str) -> None:
+        ctx.possibly_processed = True
+        if ctx.pinned_key is None:
+            ctx.pinned_key = key
+
     def _select(self, ctx: RequestContext) -> str:
+        pinned = ctx.pinned_key
+        if pinned is not None and pinned in self.pool.metrics_view():
+            return pinned
         key = self.pool.select()
         rejected = ctx.rejected
         if rejected and key in rejected:
@@ -543,12 +591,14 @@ class RequestEngine:
                 f"{ctx.method} failed with {type(error).__name__} after the request may have "
                 f"been sent; not retrying a non-idempotent request")
             return False
+        if ctx.unsafe_method and not safe_to_retry:
+            self._mark_possibly_processed(ctx, key)
         ctx.attempt += 1
         self.logger.warning(
             f"Network error: {type(error).__name__}: {error}. Attempt {ctx.attempt}/{self.policy.max_retries}")
         return True
 
-    def _retry_delay(self, attempt: int, error_type: ErrorType | None, headers: Any) -> float:
+    def _retry_delay(self, ctx: RequestContext, error_type: ErrorType | None, headers: Any) -> float:
         """
         How long to wait before the next attempt.
 
@@ -558,8 +608,13 @@ class RequestEngine:
         - Network error / other: exponential backoff.
         """
         policy = self.policy
-        backoff = policy.backoff(attempt)
+        backoff = policy.backoff(ctx.attempt - 1)
         if error_type == ErrorType.RATE_LIMIT:
+            pinned = ctx.pinned_key
+            if pinned is not None:  # must wait for this very key
+                metrics = self.pool.metrics_view().get(pinned)
+                if metrics is not None:
+                    return min(max(metrics.rate_limit_reset - time.time(), 0.0), policy.max_delay)
             return self.limiter.wait_after_rate_limit(backoff)
         if error_type == ErrorType.TEMPORARY:
             retry_after = parse_retry_after(headers)

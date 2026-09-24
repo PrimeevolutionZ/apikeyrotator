@@ -110,7 +110,7 @@ class BaseKeyRotator:
       ``recovery_timeout``
     - retries & time (RetryPolicy): ``max_retries``, ``base_delay``, ``max_delay``,
       ``timeout``, ``total_timeout``, ``retry_non_idempotent``,
-      ``should_retry_callback``, ``random_delay_range``
+      ``should_retry_callback``, ``random_delay_range``, ``auto_idempotency_key``
     - limits (RateLimiter, BreakerRegistry): ``key_rate_limit``,
       ``respect_rate_limit_headers``, ``circuit_breaker``
     - shared state (StateSync): ``state_backend``, ``state_sync_interval``
@@ -133,6 +133,7 @@ class BaseKeyRotator:
     retry_non_idempotent = _Delegate('_policy')
     should_retry_callback = _Delegate('_policy')
     random_delay_range = _Delegate('_policy')
+    auto_idempotency_key = _Delegate('_policy')
     header_callback = _Delegate('_builder')
     auth = _Delegate('_builder')
     user_agents = _Delegate('_builder')
@@ -185,6 +186,7 @@ class BaseKeyRotator:
             auto_refresh_interval: float | None = None,
             auth: str | tuple[str, str] | bool | None = None,
             unified_response: bool = False,
+            auto_idempotency_key: bool | str = False,
     ):
         self._logger = logger if logger else logging.getLogger(__name__)
 
@@ -203,6 +205,7 @@ class BaseKeyRotator:
             timeout=timeout, total_timeout=total_timeout,
             retry_non_idempotent=retry_non_idempotent,
             should_retry_callback=should_retry_callback, random_delay_range=random_delay_range,
+            auto_idempotency_key=auto_idempotency_key,
         )
 
         # --- keys ---

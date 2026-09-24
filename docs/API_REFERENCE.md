@@ -76,6 +76,7 @@ APIKeyRotator(
 | `timeout` | `float` | `10.0` | Timeout of one attempt, seconds. Overridable per request (`timeout=`). |
 | `total_timeout` | `float \| None` | `None` | Time budget of the whole request (all attempts and waits). Overridable per request (`total_timeout=`). Raises `DeadlineExceededError`. |
 | `retry_non_idempotent` | `bool` | `False` | Also retry `POST`/`PATCH` after errors where the request may already have been processed. See [Retry behaviour](#retry-behaviour). |
+| `auto_idempotency_key` | `bool \| str` | `False` | Add an `Idempotency-Key` (or the given header) to every `POST`/`PATCH` that has none - one value per request, reused on its retries - which makes those retries allowed. Only for APIs that de-duplicate by that header. |
 | `should_retry_callback` | `Callable \| None` | `None` | `callback(response) -> bool`, called with the backend's response object (`requests`/`aiohttp`/`httpx`) in both rotators. Return `True` to retry an otherwise successful response. |
 | `error_classifier` | `ErrorClassifier \| None` | `None` | Custom classification of statuses/exceptions. |
 
@@ -134,6 +135,8 @@ shared state backend. Once any request succeeds, keys rejected earlier are remov
 | `5xx` | Retries with backoff (`Retry-After` honoured). |
 | Network error | Retries with backoff. |
 | `POST`/`PATCH` + `500`/`502`/`504`, read timeout, dropped connection | **Not retried**: the response is returned / the exception re-raised (the operation may have been executed). Retried if `retry_non_idempotent=True` or an `Idempotency-Key` header is sent. `429`, `503`, `408`, `425` and connection failures are always retried. |
+| `POST`/`PATCH` retried after a maybe-executed failure (idempotency key) | Retries use the **same key** (idempotency keys are scoped to the key's account); a final error has `possibly_processed=True` and `FallbackRouter` doesn't send it elsewhere. |
+| `should_retry_callback` returns `True` for a `POST`/`PATCH` | Not retried unless the request is idempotent (the server has executed it). |
 | All attempts used | Raises `AllKeysExhaustedError` (`last_response` / `last_exception` attached). |
 | `total_timeout` spent | Raises `DeadlineExceededError`. |
 | Circuit open for the host | Raises `CircuitOpenError` without a network call. |
@@ -253,7 +256,7 @@ async def main():
 ```
 APIKeyError
 ├── NoAPIKeysError
-├── AllKeysExhaustedError          (.last_response, .last_exception)
+├── AllKeysExhaustedError          (.last_response, .last_exception, .possibly_processed)
 │   ├── DeadlineExceededError      (also a TimeoutError)
 │   ├── CircuitOpenError           (.host, .retry_after)
 │   └── AuthenticationError        (.statuses, .auth_header)
@@ -264,7 +267,7 @@ APIKeyError
 | Exception | Raised when |
 |---|---|
 | `NoAPIKeysError` | No keys were given or found (`parse_keys`, rotator constructor). |
-| `AllKeysExhaustedError(message, last_response=None, last_exception=None)` | All attempts failed or no keys are left. `last_response` is the last HTTP response (released for async), `last_exception` the last network error. |
+| `AllKeysExhaustedError(message, last_response=None, last_exception=None)` | All attempts failed or no keys are left. `last_response` is the last HTTP response (released for async), `last_exception` the last network error. `possibly_processed` is `True` if a `POST`/`PATCH` attempt may have been executed - check the operation before retrying it. |
 | `DeadlineExceededError` | The request's `total_timeout` was spent. `FallbackRouter` re-raises it instead of trying other providers. |
 | `AuthenticationError` | Every key was rejected (`401`/`403`) before any request succeeded - usually a wrong auth header. The message shows the header that was sent (key masked); `statuses` maps masked keys to status codes. Keys are kept. |
 | `CircuitOpenError(host, retry_after)` | The circuit breaker for `host` is open; `retry_after` = seconds until a probe is allowed. `FallbackRouter` moves to the next provider. |

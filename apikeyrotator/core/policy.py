@@ -24,7 +24,7 @@ class RetryPolicy:
     Pure decisions without I/O - the request engine asks, the drivers wait.
     """
 
-    __slots__ = ('max_retries', 'base_delay', 'max_delay', 'timeout', 'total_timeout',
+    __slots__ = ('idempotency_header', 'max_retries', 'base_delay', 'max_delay', 'timeout', 'total_timeout',
                  'retry_non_idempotent', 'should_retry_callback', 'random_delay_range')
 
     def __init__(
@@ -37,6 +37,7 @@ class RetryPolicy:
             retry_non_idempotent: bool = False,
             should_retry_callback: Callable[[Any], bool] | None = None,
             random_delay_range: tuple[float, float] | None = None,
+            auto_idempotency_key: bool | str = False,
     ):
         if max_retries < 1:
             raise ValueError("max_retries must be >= 1")
@@ -48,6 +49,20 @@ class RetryPolicy:
         self.retry_non_idempotent = retry_non_idempotent
         self.should_retry_callback = should_retry_callback
         self.random_delay_range = random_delay_range
+        self.auto_idempotency_key = auto_idempotency_key
+
+    @property
+    def auto_idempotency_key(self) -> bool | str:
+        return self.idempotency_header or False
+
+    @auto_idempotency_key.setter
+    def auto_idempotency_key(self, value: bool | str) -> None:
+        #: Header generated for POST/PATCH (None = off)
+        self.idempotency_header = "Idempotency-Key" if value is True else (value or None)
+
+    def is_unsafe_method(self, method_upper: str) -> bool:
+        """POST, PATCH and other methods that may change state on every call."""
+        return method_upper not in IDEMPOTENT_METHODS
 
     def is_idempotent(self, method_upper: str, headers: Any) -> bool:
         """May the request be retried after the server possibly processed it?"""

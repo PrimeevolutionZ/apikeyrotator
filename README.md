@@ -183,6 +183,19 @@ print(response.status_code, response.headers["content-type"], response.json())
 In `AsyncAPIKeyRotator` the body is read for you, so `response.json()` is not awaited
 either. See [Unified responses](docs/API_REFERENCE.md#unified-responses).
 
+### Payments, Orders and Other Side Effects
+
+The rotator never repeats a `POST`/`PATCH` that the server may already have executed
+(5xx, read timeouts) - only requests it certainly rejected (429, 503, key errors).
+With idempotency keys, retries become safe and reuse the same API key:
+
+```python
+rotator = APIKeyRotator(api_keys=["key1", "key2"], auto_idempotency_key=True)
+rotator.post("https://api.example.com/v1/charges", json={"amount": 1000})
+```
+
+See [Payments, orders and other side effects](docs/RESILIENCE.md#payments-orders-and-other-side-effects).
+
 ### Advanced Configuration
 
 ```python

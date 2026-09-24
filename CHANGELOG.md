@@ -7,7 +7,14 @@ All notable changes to APIKeyRotator will be documented in this file.
 ### Added
 - **`unified_response=True`**: every rotator and HTTP backend (requests, httpx, aiohttp; sync and async) returns the same `UnifiedResponse` - `status_code`, case-insensitive `headers` (with `get_list()` for repeated headers), `content` / `text` / `json()` without `await`, `ok`, `reason`, `url`, `elapsed`, `raise_for_status()` and the client's own object as `native`. The body is read and the connection returned to the pool; `AllKeysExhaustedError.last_response`, cache hits and `should_retry_callback` use the same object. About 2-3 µs per request; off by default.
 - `HTTPStatusError.response`.
+- **`auto_idempotency_key=True`** (or a header name): adds an `Idempotency-Key` to every POST/PATCH without one - one value per request, reused on its retries.
+- `AllKeysExhaustedError.possibly_processed`: `True` when a POST/PATCH attempt may have been executed (5xx / read timeout while retrying with an idempotency key).
 - Benchmark scenarios `overhead_sync_unified` and `overhead_async_unified`.
+
+### Fixed (side effects)
+- A POST/PATCH retried because of an `Idempotency-Key` now keeps **the same API key** after a failure where it may have been executed. It switched keys before, and idempotency keys are usually scoped to the key's account, so the retry could execute the operation a second time.
+- `FallbackRouter` no longer sends such a request to the next provider (which doesn't know the idempotency key) - it re-raises the error with `possibly_processed=True`.
+- `should_retry_callback` can no longer repeat a POST/PATCH the server has answered (and therefore executed) unless the request is idempotent.
 
 ### CI
 - GitHub Actions updated to their Node 24 versions (`checkout@v5`, `setup-python@v6`, `upload-artifact@v5`, `download-artifact@v5`).

@@ -5,7 +5,7 @@ All of them are opt-in or safe by default; the table shows the defaults.
 
 | Feature | Parameter | Default |
 |---|---|---|
-| Safe retries of non-idempotent requests | `retry_non_idempotent` | `False` (safe) |
+| Safe retries of non-idempotent requests | `retry_non_idempotent`, `auto_idempotency_key` | `False` (safe) |
 | Total time budget per request | `total_timeout` | `None` (no limit) |
 | Per-host circuit breaker | `circuit_breaker` | off |
 | Client-side key rate limit (token bucket) | `key_rate_limit` | off |
@@ -16,33 +16,74 @@ All of them are opt-in or safe by default; the table shows the defaults.
 
 ---
 
-## Safe retries of POST / PATCH
+## Payments, orders and other side effects
 
-Retrying a request that the server may already have processed can duplicate an
-operation (a payment, a message, an LLM call you pay for). The rotator therefore
+The rotator is used for any HTTP API with keys - LLMs, but also payments, orders,
+messaging, user management, webhooks. Retrying a request the server may already have
+executed would repeat the operation (charge twice, send twice), so the rotator
 distinguishes **idempotent** methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`,
-`TRACE`) from the rest.
+`TRACE`) from the rest (`POST`, `PATCH`).
 
-For `POST` / `PATCH` it retries only when the server certainly did **not** process
-the request:
+**Guarantee: a `POST`/`PATCH` is repeated only when the server certainly did not
+execute it** - unless you explicitly mark the request as idempotent.
 
-| Outcome | GET / PUT / DELETE ... | POST / PATCH |
+| Outcome of a `POST` / `PATCH` | Default | With an `Idempotency-Key` |
 |---|---|---|
-| `429`, `503`, `408`, `425` | retry | retry |
-| `401` / `403` (key rejected) | switch key | switch key |
-| `500`, `502`, `504`, ... | retry | **returned to the caller** |
-| connection refused / connect timeout | retry | retry |
-| read timeout / connection dropped | retry | **exception re-raised** |
+| `429`, `503`, `408`, `425` (not processed) | retried, any key | retried, any key |
+| `401` / `403` (key rejected) | retried with another key | retried with another key |
+| connection refused / connect timeout (never sent) | retried | retried |
+| `500`, `502`, `504`, other 5xx (maybe executed) | **returned to you** | retried **with the same key** |
+| read timeout / connection dropped (maybe executed) | **exception re-raised** | retried **with the same key** |
+| `should_retry_callback` returns `True` (executed) | **not retried**, response returned | retried with the same key |
+| `FallbackRouter`, provider failed | next provider only if nothing was executed | same - **never** sent to another provider after a maybe-executed attempt |
 
-Opt in to retries anyway when your endpoint is idempotent:
+Why the same key: idempotency keys are usually scoped to the account behind the API
+key (Stripe works this way). A retry with a key of another account would not be
+recognised as a repeat and could execute the operation again.
+
+Make retries safe for APIs that support idempotency keys (Stripe, Adyen and most
+payment APIs):
 
 ```python
-# Per request - the standard way for APIs that support it (Stripe, OpenAI, ...)
-rotator.post(url, json=payload, headers={"Idempotency-Key": str(uuid.uuid4())})
+import uuid
+from apikeyrotator import APIKeyRotator
 
-# Or globally
-rotator = APIKeyRotator(api_keys=keys, retry_non_idempotent=True)
+rotator = APIKeyRotator(api_keys=["key1", "key2"])
+
+# Per request: one key for the logical operation (store it with your order to retry later)
+rotator.post("https://api.example.com/v1/charges", json={"amount": 1000},
+             headers={"Idempotency-Key": f"order-{uuid.uuid4()}"})
+
+# Or automatically: an Idempotency-Key is generated for every POST/PATCH without one,
+# identical on all retries of that request
+rotator = APIKeyRotator(api_keys=["key1", "key2"], auto_idempotency_key=True)
+rotator = APIKeyRotator(api_keys=["key1", "key2"], auto_idempotency_key="X-Request-Id")  # other header
 ```
+
+Only use `auto_idempotency_key` / `retry_non_idempotent=True` if the API really
+de-duplicates requests - sending the header to an API that ignores it does not make
+retries safe.
+
+When a maybe-executed request finally fails, the exception says so:
+
+```python
+from apikeyrotator import AllKeysExhaustedError
+
+try:
+    rotator.post("https://api.example.com/v1/charges", json={"amount": 1000},
+                 headers={"Idempotency-Key": "order-42"})
+except AllKeysExhaustedError as e:
+    if e.possibly_processed:
+        ...   # check the charge's status before trying again
+    else:
+        ...   # nothing was executed - safe to retry later
+```
+
+Also keep in mind:
+
+- `retry_non_idempotent=True` treats every POST as idempotent - prefer idempotency keys.
+- Set `total_timeout` for user-facing payments, so a request doesn't keep retrying.
+- Keys used for payments should belong to the same account (see "Why the same key").
 
 ## Request deadline (`total_timeout`)
 
