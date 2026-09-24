@@ -5,7 +5,7 @@ import logging
 import time
 from collections.abc import Callable
 
-from apikeyrotator.state import SharedState, StateBackend
+from apikeyrotator.state import InMemoryStateBackend, SharedState, StateBackend
 
 from .keys import KeyPool
 from .util import mask_key
@@ -17,17 +17,23 @@ Report = tuple[str, tuple]
 
 _HASHER = StateBackend()
 
+#: After a backend error, calls are skipped for this many seconds (so an outage costs one
+#: timeout per interval, not one per request); token buckets are kept locally meanwhile
+BACKEND_RETRY_INTERVAL = 5.0
+
 
 class StateSync:
     """
     Keeps the local key pool and a shared StateBackend in sync.
 
     Everything is best effort: a backend outage is logged (at most every 30s)
-    and requests continue with local state ("fail open").
+    and requests continue with local state ("fail open"). While the backend is
+    down, ``key_rate_limit`` is enforced per process by local token buckets.
     """
 
     __slots__ = ('backend', 'shared', 'sync_interval', 'pool', 'logger', '_on_invalid',
-                 '_last_sync', '_key_ids', 'invalid_ids', '_error_logged_at')
+                 '_last_sync', '_key_ids', 'invalid_ids', '_error_logged_at', '_down_until',
+                 '_local_buckets')
 
     def __init__(self, backend: StateBackend | None, sync_interval: float, pool: KeyPool,
                  logger: logging.Logger, on_invalid: Callable[[str], None]):
@@ -41,6 +47,8 @@ class StateSync:
         self._key_ids: dict[str, str] = {}
         self.invalid_ids: set[str] = set()
         self._error_logged_at = 0.0
+        self._down_until = float('-inf')
+        self._local_buckets: InMemoryStateBackend | None = None
 
     @property
     def blocking(self) -> bool:
@@ -69,10 +77,16 @@ class StateSync:
 
     # --- pull ---
 
+    def available(self) -> bool:
+        """False for a while after a backend error."""
+        return time.monotonic() >= self._down_until
+
     def sync_due(self) -> bool:
         if not self.shared:
             return False
         now = time.monotonic()
+        if now < self._down_until:
+            return False
         if now - self._last_sync < self.sync_interval:
             return False
         self._last_sync = now
@@ -107,26 +121,35 @@ class StateSync:
 
     def flush(self, reports: list[Report]) -> None:
         backend = self.backend
-        if backend is None:
+        if backend is None or not reports or not self.available():
             return
         for method, args in reports:
             try:
                 getattr(backend, method)(*args)
             except Exception as e:
                 self.log_error(method, e)
+                return
 
     # --- token buckets ---
 
     def acquire_token(self, key: str, capacity: int, refill_per_second: float) -> float:
-        """Takes a token for `key`; returns seconds to wait (0 = acquired). Fails open."""
-        try:
-            return self.backend.acquire_token(self.key_id(key), capacity, refill_per_second)
-        except Exception as e:
-            self.log_error("acquire_token", e)
-            return 0.0
+        """Takes a token for `key`; returns seconds to wait (0 = acquired)."""
+        kid = self.key_id(key)
+        if self.available():
+            try:
+                return self.backend.acquire_token(kid, capacity, refill_per_second)
+            except Exception as e:
+                self.log_error("acquire_token", e)
+        # Backend down: limit this process on its own rather than not at all
+        local = self._local_buckets
+        if local is None:
+            local = self._local_buckets = InMemoryStateBackend(shared=False)
+        return local.acquire_token(kid, capacity, refill_per_second)
 
     def log_error(self, action: str, error: Exception) -> None:
         now = time.monotonic()
+        self._down_until = now + BACKEND_RETRY_INTERVAL
         if now - self._error_logged_at > 30:
             self._error_logged_at = now
-            self.logger.warning(f"State backend {action} failed (continuing locally): {error}")
+            self.logger.warning(f"State backend {action} failed (continuing locally, "
+                                f"retrying in {BACKEND_RETRY_INTERVAL:g}s): {error}")

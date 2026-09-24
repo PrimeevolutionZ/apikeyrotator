@@ -357,8 +357,16 @@ with ThreadPoolExecutor(max_workers=16) as executor:
     results = list(executor.map(fetch, range(100)))
 ```
 
-For several **processes** or machines, add `state_backend=RedisStateBackend(...)`
-so they share limits and rejected keys ([Resilience](RESILIENCE.md)).
+For several **processes** or machines, create one rotator per process (after the fork)
+and add `state_backend=RedisStateBackend(...)` so they share limits and rejected keys.
+Details and real output for threads, asyncio and processes:
+[Behavior Under Load](BEHAVIOR.md#1-threads-async-tasks-and-processes).
+
+### What happens with binary files, large downloads or one host down?
+
+See [Behavior Under Load and Edge Cases](BEHAVIOR.md): binary bodies are byte-exact
+with every backend, large files are streamed with `stream=True`, and circuit breakers
+are per host, so a dead host doesn't affect the others.
 
 ### Can I switch to another API provider when one fails?
 

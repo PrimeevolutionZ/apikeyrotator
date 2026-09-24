@@ -5,7 +5,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
+[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
 [![Downloads](https://pepy.tech/badge/apikeyrotator)](https://pepy.tech/project/apikeyrotator)
 [![Tests](https://github.com/PrimeevolutionZ/apikeyrotator/actions/workflows/ci.yml/badge.svg)](https://github.com/PrimeevolutionZ/apikeyrotator/actions/workflows/ci.yml)
@@ -502,6 +502,7 @@ rotator = APIKeyRotator(
 | [Advanced Usage](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ADVANCED_USAGE.md)   | Power features & customization |
 | [Error Handling](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ERROR_HANDLING.md)   | Comprehensive error management |
 | [Resilience & Scaling](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/RESILIENCE.md) | Deadlines, circuit breaker, rate limits, Redis, httpx |
+| [Behavior Under Load](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/BEHAVIOR.md) | Threads, processes, binary bodies, partial failures - real output |
 | [Benchmarks](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/benchmarks/README.md)         | Performance measurements       |
 | [FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/FAQ.md)                          | Frequently asked questions     |
 | [Security](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/SECURITY.md)                    | Security best practices        |

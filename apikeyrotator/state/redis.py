@@ -71,6 +71,7 @@ class RedisStateBackend(StateBackend):
             namespace: str = "apikeyrotator",
             salt: bytes | None = None,
             bucket_ttl: int = 3600,
+            socket_timeout: float | None = 1.0,
     ):
         """
         Args:
@@ -79,6 +80,8 @@ class RedisStateBackend(StateBackend):
             namespace: Prefix for all Redis keys - use one per upstream provider.
             salt: Optional HMAC salt for key ids (same value on all instances).
             bucket_ttl: Seconds after which idle token buckets expire.
+            socket_timeout: Connect / read timeout of the client created from ``url``
+                (an unreachable Redis must not stall requests; ignored with ``client``).
         """
         if client is None:
             try:
@@ -87,7 +90,8 @@ class RedisStateBackend(StateBackend):
                 raise ImportError(
                     "RedisStateBackend requires redis: pip install 'apikeyrotator[redis]'"
                 ) from e
-            client = redis.Redis.from_url(url or "redis://localhost:6379/0")
+            client = redis.Redis.from_url(url or "redis://localhost:6379/0", socket_timeout=socket_timeout,
+                                          socket_connect_timeout=socket_timeout)
         self._r = client
         self.namespace = namespace
         self.salt = salt

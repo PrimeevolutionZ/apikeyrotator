@@ -2,10 +2,14 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
-## [Unreleased]
+## [0.9.1] - 2026-09-24
+
+Checks of thread safety, binary bodies, partial failures and Redis consistency in real
+code, a new guide with the results, and the fixes they led to.
 
 ### Fixed
 - **LRU strategy on coarse clocks**: selections were ordered by `time.time()`; where the clock moves in steps (~15 ms on Windows) every selection within a step got the same timestamp and one key received almost all requests (2395 of 2400 in a test). It also let the completion time of a request reorder keys, so concurrent use was not strictly least-recently-used. Selections are now ordered by a counter: exact rotation under any clock and concurrency.
+- **Redis outage**: while the state backend was unreachable, `key_rate_limit` was not enforced at all (every token request "succeeded"), and every request paid the connection timeout again - with an unreachable host, possibly minutes, since clients created from `url=` had no timeout. Now Redis is not contacted for 5 s after an error, token buckets are kept per process meanwhile, and `RedisStateBackend(url=...)` uses `socket_timeout=1.0`.
 
 ### Changed
 - `PrometheusExporter.export(rotator)` accepts the rotator itself (the `metrics, key_metrics=` form still works).
@@ -16,6 +20,7 @@ All notable changes to APIKeyRotator will be documented in this file.
 - Shared state against a real Redis with several processes (global token bucket, revoked key propagation); CI runs it with a Redis service.
 
 ### Documentation
+- New guide [Behavior Under Load and Edge Cases](docs/BEHAVIOR.md): threads, asyncio and processes, strategies under concurrency, binary / large / non-UTF-8 / non-JSON bodies, one host down, revoked keys, fallback providers, several processes with Redis (global limits, revoked keys, outages), keys with commas, auth header choice, metrics calls. Every example shows its real output.
 - Consistency model of the shared state (token buckets strong, rate-limited / revoked keys eventual within `state_sync_interval`), breaker scope per host, keys containing commas.
 
 ## [0.9.0] - 2026-09-24

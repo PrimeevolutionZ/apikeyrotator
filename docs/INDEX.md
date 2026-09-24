@@ -17,6 +17,7 @@ This documentation will help you get started with APIKeyRotator and master its a
 | [Advanced Usage](ADVANCED_USAGE.md)   | Power features and customization             | Advanced users, custom implementations |
 | [Error Handling](ERROR_HANDLING.md)   | Comprehensive error management guide         | Debugging, production deployment       |
 | [Resilience & Scaling](RESILIENCE.md) | Deadlines, circuit breaker, rate limits, Redis, httpx | Production under load, many workers |
+| [Behavior Under Load](BEHAVIOR.md)    | Threads, processes, binary bodies, partial failures, Redis outages - with real output | "What exactly happens when..." |
 | [FAQ](FAQ.md)                         | Frequently asked questions                   | Quick answers to common questions      |
 | [Benchmarks](../benchmarks/README.md) | Measured speed, CPU and memory; how to compare versions | Performance work, CI |
 
@@ -194,6 +195,21 @@ Running under load and across many processes.
 
 ---
 
+### [Behavior Under Load and Edge Cases](BEHAVIOR.md)
+
+What exactly happens in situations that are hard to test by hand. Every example
+shows its real output.
+
+**Topics covered:**
+- One rotator for many threads; asyncio; processes (create after the fork)
+- What each rotation strategy guarantees under concurrency
+- Binary and large bodies, streaming, other text encodings, non-JSON bodies
+- One host down while another is alive; revoked keys; fallback providers
+- Several processes with Redis: consistency, global limits, Redis outages
+- Keys containing commas; which auth header is sent; which metrics call returns what
+
+---
+
 ### [FAQ](FAQ.md)
 
 Quick answers to frequently asked questions.
@@ -231,6 +247,7 @@ Quick answers to frequently asked questions.
 | See examples        | [Examples](EXAMPLES.md)                              |
 | Debug issues        | [Error Handling](ERROR_HANDLING.md#troubleshooting)  |
 | Many workers / Redis | [Resilience](RESILIENCE.md#shared-state-between-processes-redis) |
+| Threads, processes, edge cases | [Behavior Under Load](BEHAVIOR.md) |
 | Measure performance | [Benchmarks](../benchmarks/README.md)                |
 
 ### Code Snippets
@@ -501,6 +518,13 @@ Recommended reading order:
    - [FAQ](FAQ.md) → [Error Handling](ERROR_HANDLING.md) → [GitHub Issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
 
 ---
+
+## What's New in 0.9.1
+
+- New guide: [Behavior Under Load and Edge Cases](BEHAVIOR.md) - threads, processes, binary bodies, partial failures, Redis outages, with real output
+- `lru` rotates exactly under concurrency and on coarse clocks (Windows)
+- Redis outage: `key_rate_limit` still enforced per process, Redis retried every 5 s instead of on every request
+- `PrometheusExporter.export(rotator)`
 
 ## What's New in 0.9.0
 

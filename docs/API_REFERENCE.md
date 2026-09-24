@@ -404,7 +404,8 @@ Used via `state_backend=`. Keys are identified by `sha256(key)` (HMAC-SHA256 wit
 ### RedisStateBackend
 
 ```python
-RedisStateBackend(client=None, url=None, namespace="apikeyrotator", salt=None, bucket_ttl=3600)
+RedisStateBackend(client=None, url=None, namespace="apikeyrotator", salt=None, bucket_ttl=3600,
+                  socket_timeout=1.0)
 ```
 
 | Parameter | Description |
@@ -414,12 +415,14 @@ RedisStateBackend(client=None, url=None, namespace="apikeyrotator", salt=None, b
 | `namespace` | Prefix of all Redis keys - use one per upstream provider. |
 | `salt` | HMAC salt for key ids; must be the same on all instances. |
 | `bucket_ttl` | Seconds after which idle token buckets expire. |
+| `socket_timeout` | Connect/read timeout of the client created from `url` (default 1 s), so an unreachable Redis cannot stall requests. Ignored when `client` is given - set timeouts on your client. |
 
 Stores `{namespace}:rl` (sorted set: key id → parked-until timestamp),
 `{namespace}:invalid` (set of rejected key ids) and `{namespace}:tb:{id}` (token
 buckets, updated atomically by a Lua script using the Redis server clock).
 Errors never fail requests: the rotator continues with local state and logs a
-warning at most every 30 s. Requires `pip install apikeyrotator[redis]`.
+warning at most every 30 s. After an error Redis is not contacted for 5 s; token
+buckets are kept per process during that time. Requires `pip install apikeyrotator[redis]`.
 
 ### InMemoryStateBackend
 

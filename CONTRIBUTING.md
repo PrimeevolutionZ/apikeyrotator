@@ -252,8 +252,8 @@ Releases are automated (`.github/workflows/release.yml`, called by CI):
    no `v` prefix) and a GitHub release with the wheel and the sdist. A version that is
    already tagged is skipped, so ordinary merges don't release anything.
 
-Alternatives: push a tag yourself (`git tag -a 0.9.0 -m "apikeyrotator 0.9.0" && git push
-origin 0.9.0` - CI runs on tags too, and the tag must match the package version), or run
+Alternatives: push a tag yourself (`git tag -a 0.9.1 -m "apikeyrotator 0.9.1" && git push
+origin 0.9.1` - CI runs on tags too, and the tag must match the package version), or run
 **Actions → Release → Run workflow** for any commit.
 
 PyPI publishing is opt-in: add a [trusted publisher](https://docs.pypi.org/trusted-publishers/)

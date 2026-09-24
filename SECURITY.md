@@ -185,4 +185,4 @@ Security advisories) to be notified.
 
 ---
 
-**Last updated:** September 2026 · **Version:** 0.9.0
+**Last updated:** September 2026 · **Version:** 0.9.1

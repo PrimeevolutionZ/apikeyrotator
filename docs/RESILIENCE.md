@@ -203,7 +203,10 @@ most once per interval). Verified with 4 processes against a real Redis: a share
 
 - **Raw keys never reach Redis** - only `sha256(key)` (or HMAC with `salt=b"..."`).
 - **Fail-open**: if Redis is unavailable, requests continue with local state; a warning
-  is logged at most every 30s.
+  is logged at most every 30s. Redis is then left alone for 5 s (one timeout per 5 s, not
+  per request; clients created from `url=` use a 1 s `socket_timeout`), and `key_rate_limit`
+  is enforced per process by local token buckets meanwhile. Real output of an outage and of
+  4 processes sharing a limit: [Behavior Under Load](BEHAVIOR.md#5-several-processes-sharing-keys-redis).
 - Async rotators run Redis calls in a worker thread, so the event loop is never blocked.
 - `InMemoryStateBackend()` shares state between rotators in one process.
 

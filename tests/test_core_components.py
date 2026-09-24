@@ -242,6 +242,23 @@ class TestStateSync:
         state.flush(reports)  # logged, not raised
         assert "redis down" in caplog.text
 
+    def test_backend_outage_keeps_token_buckets_locally_and_backs_off(self):
+        calls = []
+
+        class Broken(InMemoryStateBackend):
+            def acquire_token(self, *args):
+                calls.append(args)
+                raise ConnectionError("redis down")
+
+        pool = KeyPool(["k1"], "round_robin", None, LOG)
+        state = StateSync(Broken(), 0.0, pool, LOG, on_invalid=pool.remove)
+        assert [state.acquire_token("k1", 2, 0.001) == 0.0 for _ in range(3)] == [True, True, False]
+        assert len(calls) == 1              # skipped during BACKEND_RETRY_INTERVAL
+        assert not state.sync_due()         # no snapshot pulls either
+        state._down_until = float('-inf')   # interval over: the backend is tried again
+        state.acquire_token("k1", 2, 0.001)
+        assert len(calls) == 2
+
     def test_key_ids_are_hashes(self):
         pool = KeyPool(["secret-key"], "round_robin", None, LOG)
         state = StateSync(None, 1.0, pool, LOG, on_invalid=pool.remove)
