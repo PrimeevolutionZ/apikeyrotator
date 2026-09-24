@@ -109,7 +109,9 @@ rotator = APIKeyRotator(api_keys=["key1"], proxy_list=[proxy])
 
 ### Logging
 
-The library never logs raw keys (only the first 4 characters, e.g. `sk-1****`) and
+The library never logs raw keys - only a mask: the first and last 4 characters of keys
+of 16+ characters (`sk-p...wxyz`, as API dashboards show them), the first 4 otherwise
+(`sk-1****`) - and
 prints nothing unless your application configures logging. At `DEBUG` level,
 `LoggingMiddleware` logs request headers (secrets redacted) and JSON request bodies -
 avoid `DEBUG` in production if bodies may contain personal data:
@@ -140,7 +142,7 @@ rotator = APIKeyRotator(api_keys=["key1"], http_client_kwargs={"verify": "/etc/s
   (and, with a shared state backend, from all instances); background refresh does not
   re-add them.
 - **Masking everywhere**: logs, `export_config()`, Prometheus labels and error messages
-  show only the first 4 characters of a key.
+  show only the masked key (`sk-p...wxyz` / `sk-1****`).
 - **No secrets at rest**: nothing is written to disk; Redis holds only key hashes.
 - **Timeouts and deadlines**: `timeout` per attempt and `total_timeout` per request
   prevent hanging requests; the circuit breaker stops hammering failing hosts.

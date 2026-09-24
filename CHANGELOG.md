@@ -11,6 +11,11 @@ All notable changes to APIKeyRotator will be documented in this file.
 - `AllKeysExhaustedError.possibly_processed`: `True` when a POST/PATCH attempt may have been executed (5xx / read timeout while retrying with an idempotency key).
 - Benchmark scenarios `overhead_sync_unified` and `overhead_async_unified`.
 
+### Fixed
+- After an `AuthenticationError`, fixing the header (`rotator.auth = ...`) and making a successful request removed **all** keys: the keys rejected because of the wrong header were treated as invalid once a request succeeded. Rejections that explain an `AuthenticationError` are now forgotten, and changing `auth` / `header_callback` requires the new header to be confirmed again.
+- Key masks: keys of 16+ characters show their first and last 4 characters (`sk-p...wxyz`), so keys with a common prefix (`sk-proj-...`) are distinguishable in logs, metrics and errors; `AuthenticationError.statuses` no longer merges keys with the same mask.
+- Log messages use one format (`status 503, key sk-p...wxyz`); per-attempt timeouts clipped to the deadline are rounded to milliseconds.
+
 ### Fixed (side effects)
 - A POST/PATCH retried because of an `Idempotency-Key` now keeps **the same API key** after a failure where it may have been executed. It switched keys before, and idempotency keys are usually scoped to the key's account, so the retry could execute the operation a second time.
 - `FallbackRouter` no longer sends such a request to the next provider (which doesn't know the idempotency key) - it re-raises the error with `possibly_processed=True`.

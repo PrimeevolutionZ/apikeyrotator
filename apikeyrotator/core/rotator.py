@@ -64,7 +64,7 @@ from .transport import (
     create_async_transport,
     create_sync_transport,
 )
-from .util import host_of, in_running_loop, mask_key, run_coroutine_sync
+from .util import host_of, in_running_loop, mask_key, run_coroutine_sync, unique_labels
 
 
 if TYPE_CHECKING:  # HTTP libraries are imported lazily by the transports
@@ -134,8 +134,6 @@ class BaseKeyRotator:
     should_retry_callback = _Delegate('_policy')
     random_delay_range = _Delegate('_policy')
     auto_idempotency_key = _Delegate('_policy')
-    header_callback = _Delegate('_builder')
-    auth = _Delegate('_builder')
     user_agents = _Delegate('_builder')
     proxy_list = _Delegate('_builder')
     save_sensitive_headers = _Delegate('_builder')
@@ -291,6 +289,24 @@ class BaseKeyRotator:
             self.logger.info(f"Middlewares loaded: {len(self.middlewares)}")
 
     @property
+    def auth(self) -> str | tuple[str, str] | bool | None:
+        return self._builder.auth
+
+    @auth.setter
+    def auth(self, auth: str | tuple[str, str] | bool | None) -> None:
+        self._builder.auth = auth
+        self._pool.reset_auth()  # the new header must prove itself before keys are removed
+
+    @property
+    def header_callback(self) -> Callable | None:
+        return self._builder.header_callback
+
+    @header_callback.setter
+    def header_callback(self, callback: Callable | None) -> None:
+        self._builder.header_callback = callback
+        self._pool.reset_auth()
+
+    @property
     def logger(self) -> logging.Logger:
         return self._logger
 
@@ -407,12 +423,9 @@ class BaseKeyRotator:
             'key_rate_limit': self.key_rate_limit,
         }
         if self.metrics:
-            config['key_statistics'] = {}
-            for index, (key, key_metrics) in enumerate(self._pool.metrics_dict().items()):
-                safe_key = f"{key[:4]}****" if len(key) > 4 else "****"
-                if safe_key in config['key_statistics']:
-                    safe_key = f"{safe_key}#{index}"
-                config['key_statistics'][safe_key] = key_metrics
+            stats = self._pool.metrics_dict()
+            labels = unique_labels(stats)
+            config['key_statistics'] = {labels[key]: key_metrics for key, key_metrics in stats.items()}
         return config
 
     # ------------------------------------------------------------------

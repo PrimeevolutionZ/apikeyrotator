@@ -9,10 +9,32 @@ from typing import Any
 
 KEY_LOG_LENGTH = 4
 KEY_LOG_SUFFIX = '****'
+#: Keys at least this long also show their last 4 characters (like API dashboards do)
+KEY_TAIL_MIN_LENGTH = 16
 
 
-def mask_key(key: str) -> str:
-    return f"{key[:KEY_LOG_LENGTH]}{KEY_LOG_SUFFIX}"
+def mask_key(key: str, prefix: int = KEY_LOG_LENGTH) -> str:
+    """
+    Safe label of a key for logs and metrics: ``sk-p...wxyz`` for keys of 16+
+    characters (first 4 + last 4, so keys with a common prefix stay apart),
+    ``sk-1****`` for shorter ones.
+    """
+    if len(key) >= KEY_TAIL_MIN_LENGTH:
+        return f"{key[:prefix]}...{key[-4:]}"
+    return f"{key[:prefix]}{KEY_LOG_SUFFIX}"
+
+
+def unique_labels(keys) -> dict[str, str]:
+    """{key: masked label}, labels made unique with '#n' when masks collide."""
+    labels: dict[str, str] = {}
+    used: set[str] = set()
+    for index, key in enumerate(keys):
+        label = mask_key(key)
+        if label in used:
+            label = f"{label}#{index}"
+        used.add(label)
+        labels[key] = label
+    return labels
 
 
 def endpoint_label(url: str) -> str:

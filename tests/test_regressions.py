@@ -472,3 +472,53 @@ class TestAsyncRotator:
                 await rotator.get('http://example.com', timeout=3)
         assert isinstance(captured['timeout'], aiohttp.ClientTimeout)
         assert captured['timeout'].total == 3
+
+
+class TestAuthFixKeepsKeys:
+    """Found by running the usage examples: fixing the auth header removed every key."""
+
+    def test_keys_survive_fixing_the_header_after_authentication_error(self):
+        from apikeyrotator import AuthenticationError
+
+        rotator = make_rotator(['a', 'b'])
+        with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = resp(401)
+            with pytest.raises(AuthenticationError):
+                rotator.get('http://example.com')
+            rotator.auth = 'x-api-key'
+            mock_request.return_value = resp(200)
+            rotator.get('http://example.com')
+            rotator.get('http://example.com')
+        assert rotator.keys == ['a', 'b']
+
+    def test_changing_auth_requires_new_confirmation(self):
+        from apikeyrotator import AuthenticationError
+
+        rotator = make_rotator(['a', 'b'])
+        with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = resp(200)
+            rotator.get('http://example.com')          # old header confirmed
+            rotator.auth = ('Authorization', 'Token {key}')
+            mock_request.return_value = resp(401)
+            with pytest.raises(AuthenticationError):    # new header wrong: keys kept
+                rotator.get('http://example.com')
+        assert rotator.keys == ['a', 'b']
+
+
+class TestKeyMasks:
+    def test_long_keys_with_a_common_prefix_stay_distinct(self):
+        from apikeyrotator.core.util import mask_key, unique_labels
+
+        a, b = "sk-proj-" + "a" * 40 + "1111", "sk-proj-" + "b" * 40 + "2222"
+        assert mask_key(a) == "sk-p...1111" and mask_key(b) == "sk-p...2222"
+        assert mask_key("short-key") == "shor****"
+        assert unique_labels(["key-a", "key-b"]) == {"key-a": "key-****", "key-b": "key-****#1"}
+
+    def test_authentication_error_lists_every_key(self):
+        from apikeyrotator import AuthenticationError
+
+        rotator = make_rotator(['key-a', 'key-b'])
+        with patch('requests.Session.request', return_value=resp(403)):
+            with pytest.raises(AuthenticationError) as exc:
+                rotator.get('http://example.com')
+        assert len(exc.value.statuses) == 2

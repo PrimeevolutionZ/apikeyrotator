@@ -150,6 +150,15 @@ class KeyPool:
     def suspects(self) -> dict[str, int]:
         return dict(self._suspects)
 
+    def clear_suspects(self) -> None:
+        """Every key was rejected: the auth header is at fault, not the keys."""
+        self._suspects = {}
+
+    def reset_auth(self) -> None:
+        """The auth header changed: it has to be confirmed again, earlier rejections don't count."""
+        self.auth_confirmed = False
+        self._suspects = {}
+
     def confirm_auth(self) -> dict[str, int]:
         """Marks auth as working; returns the suspects, which are now known to be invalid."""
         self.auth_confirmed = True

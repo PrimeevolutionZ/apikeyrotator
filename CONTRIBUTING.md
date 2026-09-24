@@ -166,7 +166,7 @@ rotator performs the effects with blocking calls, the async rotator awaits them.
 - **Errors**: raise specific exceptions (subclasses of `APIKeyError` for library
   errors); never swallow exceptions silently.
 - **Logging**: `logger = logging.getLogger(__name__)`; never add handlers or set
-  levels in library code; never log raw API keys (mask with the first 4 characters).
+  levels in library code; never log raw API keys (use `apikeyrotator.core.util.mask_key`).
   Use `%`-style arguments in hot paths (`logger.debug("key %s", masked)`).
 - **Thread safety**: rotators are shared between threads; guard shared mutable state.
 - **Optional dependencies** (httpx, redis, boto3, google-cloud) are imported lazily.

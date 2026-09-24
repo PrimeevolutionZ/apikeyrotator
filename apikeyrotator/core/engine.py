@@ -68,7 +68,7 @@ from .policy import NON_IDEMPOTENT_RETRYABLE_STATUSES, RetryPolicy
 from .request_builder import RequestBuilder
 from .responses import StatusView, UnifiedResponse
 from .shared_state import Report, StateSync
-from .util import endpoint_label, host_of, mask_key
+from .util import endpoint_label, host_of, mask_key, unique_labels
 
 
 SEND, DONE, SHORT, READ, RELEASE, SLEEP, BEFORE, AFTER, ON_ERROR, CALL = range(10)
@@ -468,6 +468,9 @@ class RequestEngine:
                         rejected = ctx.rejected = {}
                     rejected[key] = status_code
                     if len(rejected) >= pool.count():
+                        # Every key was refused - the header is wrong, so none of them is
+                        # "known invalid": they must not be removed once a request succeeds
+                        pool.clear_suspects()
                         return Action.AUTH_FAILED, error_type
                     self.logger.warning(
                         f"Key {mask_key(key)} rejected (status {status_code}) before any request "
@@ -499,7 +502,7 @@ class RequestEngine:
                 self._mark_possibly_processed(ctx, key)
             msg = "Rate limited" if is_rate_limited else "Temporary error"
             self.logger.warning(
-                f"{msg} (Status: {status_code}, key: {mask_key(key)}). "
+                f"{msg} (status {status_code}, key {mask_key(key)}). "
                 f"Attempt {ctx.attempt + 1}/{policy.max_retries}")
             return Action.RETRY, error_type
 
@@ -516,7 +519,7 @@ class RequestEngine:
                     self._mark_possibly_processed(ctx, key)
                 self._record(key, endpoint, False, request_time)
                 self.logger.warning(
-                    f"Retry requested by should_retry_callback (Status: {status_code}). "
+                    f"Retry requested by should_retry_callback (status {status_code}). "
                     f"Attempt {ctx.attempt + 1}/{policy.max_retries}")
                 return Action.RETRY, None
 
@@ -525,7 +528,7 @@ class RequestEngine:
             self._confirm_auth(ctx)
         self.limiter.on_success(ctx.reports, key, headers)
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("Success (Status: %s)", status_code)
+            self.logger.debug("Success (status %s)", status_code)
         return Action.RETURN, None
 
     def _mark_possibly_processed(self, ctx: RequestContext, key: str) -> None:
@@ -556,7 +559,8 @@ class RequestEngine:
 
     def _auth_error(self, ctx: RequestContext) -> AuthenticationError:
         rejected = ctx.rejected or {}
-        statuses = {mask_key(k): status for k, status in rejected.items()}
+        labels = unique_labels(rejected)
+        statuses = {labels[k]: status for k, status in rejected.items()}
         builder = self.builder
         sample = next(iter(rejected), None)
         header = builder.masked_auth_header(sample) if sample is not None else None

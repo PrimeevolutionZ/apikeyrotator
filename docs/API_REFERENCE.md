@@ -546,7 +546,7 @@ text = PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_st
 
 Returns the Prometheus text format: `rotator_total_requests`,
 `rotator_successful_requests`, `rotator_failed_requests`, `rotator_uptime_seconds`,
-per-key `rotator_key_*{key="sk-1****"}` (masked) and per-endpoint
+per-key `rotator_key_*{key="sk-p...wxyz"}` (masked) and per-endpoint
 `rotator_endpoint_*{endpoint="..."}` series.
 
 ---

@@ -101,5 +101,5 @@ class RetryPolicy:
         else:
             return None  # library-specific timeout object - passed through as is
         if remaining is not None:
-            timeout = min(timeout, max(remaining, 0.001))
+            timeout = min(timeout, max(round(remaining, 3), 0.001))
         return timeout

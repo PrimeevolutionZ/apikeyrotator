@@ -252,7 +252,7 @@ with open("/var/lib/node_exporter/textfile/rotator.prom", "w") as f:   # textfil
     f.write(text)
 ```
 
-Keys are masked in labels (`key="sk-1****"`).
+Keys are masked in labels (`key="sk-p...wxyz"`, short keys `key="sk-1****"`).
 
 ### Export Configuration
 

@@ -11,7 +11,9 @@ def _escape_label(value: str) -> str:
 
 
 def _mask_key(key: str) -> str:
-    return f"{key[:4]}****" if len(key) > 4 else "****"
+    from apikeyrotator.core.util import mask_key
+
+    return mask_key(key) if len(key) > 4 else "****"
 
 
 class PrometheusExporter:

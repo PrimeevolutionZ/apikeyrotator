@@ -64,9 +64,9 @@ class LoggingMiddleware(RotatorMiddleware):
         return allowed
 
     def _mask_key(self, key: str) -> str:
-        if len(key) <= self.max_key_chars:
-            return key[:self.max_key_chars] + "****"
-        return key[:self.max_key_chars] + "****"
+        from apikeyrotator.core.util import mask_key
+
+        return mask_key(key, self.max_key_chars)
 
     def _format_headers(self, headers: dict) -> str:
         safe_headers = {}
