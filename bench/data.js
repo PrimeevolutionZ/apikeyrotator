@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790258273498,
+  "lastUpdate": 1790258753666,
   "repoUrl": "https://github.com/PrimeevolutionZ/apikeyrotator",
   "entries": {
     "Throughput (higher is better)": [
@@ -1132,6 +1132,240 @@ window.BENCHMARK_DATA = {
           {
             "name": "e2e_async_local_http · ops_per_sec",
             "value": 3027.5,
+            "unit": "ops/s",
+            "extra": "Real HTTP round-trips to a local server (async, 50 concurrent)"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "noreply@anthropic.com",
+            "name": "Claude",
+            "username": "claude"
+          },
+          "committer": {
+            "email": "noreply@anthropic.com",
+            "name": "Claude",
+            "username": "claude"
+          },
+          "distinct": false,
+          "id": "049ad641a947aef7d06dbee9ed8bfc70df154977",
+          "message": "fix: keep keys after fixing the auth header; distinguishable key masks\n\nFound by running the usage examples against a live demo API:\n\n- After an AuthenticationError, setting rotator.auth and succeeding removed\n  every key - the rejections caused by the wrong header were treated as\n  invalid keys once a request succeeded. Rejections that explain an\n  AuthenticationError are now forgotten, and changing auth/header_callback\n  resets the confirmation.\n- Keys of 16+ characters are masked as sk-p...wxyz (first + last 4), so keys\n  with a common prefix are distinguishable; AuthenticationError.statuses no\n  longer merges keys with the same mask. One mask function for logs,\n  export_config, Prometheus and LoggingMiddleware.\n- Unified log wording (\"status 503, key ...\"); clipped attempt timeouts are\n  rounded to milliseconds.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01F6FRG9xUgZ3KxwroGa993w",
+          "timestamp": "2026-09-24T14:05:09Z",
+          "tree_id": "ddcc5162fe1b74891be6502a5b623d0c0f0a4915",
+          "url": "https://github.com/PrimeevolutionZ/apikeyrotator/commit/049ad641a947aef7d06dbee9ed8bfc70df154977"
+        },
+        "date": 1790258753163,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "overhead_sync_round_robin · ops_per_sec",
+            "value": 99904,
+            "unit": "ops/s",
+            "extra": "Sync request overhead, 10 keys, strategy=round_robin, stub transport"
+          },
+          {
+            "name": "overhead_sync_random · ops_per_sec",
+            "value": 97143.5,
+            "unit": "ops/s",
+            "extra": "Sync request overhead, 10 keys, strategy=random, stub transport"
+          },
+          {
+            "name": "overhead_sync_weighted · ops_per_sec",
+            "value": 94786.2,
+            "unit": "ops/s",
+            "extra": "Sync request overhead, 10 keys, strategy=weighted, stub transport"
+          },
+          {
+            "name": "overhead_sync_lru · ops_per_sec",
+            "value": 89062.4,
+            "unit": "ops/s",
+            "extra": "Sync request overhead, 10 keys, strategy=lru, stub transport"
+          },
+          {
+            "name": "overhead_sync_health_based · ops_per_sec",
+            "value": 90722,
+            "unit": "ops/s",
+            "extra": "Sync request overhead, 10 keys, strategy=health_based, stub transport"
+          },
+          {
+            "name": "overhead_sync_middlewares · ops_per_sec",
+            "value": 51022.8,
+            "unit": "ops/s",
+            "extra": "Sync overhead with Logging+RateLimit middlewares (all misses)"
+          },
+          {
+            "name": "overhead_sync_all_features · ops_per_sec",
+            "value": 76540.6,
+            "unit": "ops/s",
+            "extra": "Sync overhead with circuit breaker, key token bucket and request deadline enabled"
+          },
+          {
+            "name": "overhead_sync_cache_hits · ops_per_sec",
+            "value": 74003.4,
+            "unit": "ops/s",
+            "extra": "Sync requests served by CachingMiddleware (same URL)"
+          },
+          {
+            "name": "overhead_sync_unified · ops_per_sec",
+            "value": 89181.9,
+            "unit": "ops/s",
+            "extra": "Sync overhead with unified_response=True"
+          },
+          {
+            "name": "overhead_async_unified · ops_per_sec",
+            "value": 57123.2,
+            "unit": "ops/s",
+            "extra": "Async overhead with unified_response=True, sequential"
+          },
+          {
+            "name": "overhead_async · ops_per_sec",
+            "value": 61094.2,
+            "unit": "ops/s",
+            "extra": "Async request overhead, 10 keys, sequential"
+          },
+          {
+            "name": "concurrency_sync_16_threads · ops_per_sec",
+            "value": 14400.9,
+            "unit": "ops/s",
+            "extra": "16 threads, 1ms simulated upstream latency"
+          },
+          {
+            "name": "concurrency_async_200_tasks · ops_per_sec",
+            "value": 40031.9,
+            "unit": "ops/s",
+            "extra": "200 concurrent asyncio tasks, 1ms simulated upstream latency"
+          },
+          {
+            "name": "resilience_rate_limit_10pct · ops_per_sec",
+            "value": 76413.6,
+            "unit": "ops/s",
+            "extra": "10 keys, 10% of responses are 429 (Retry-After: 1). Sleeps are simulated"
+          },
+          {
+            "name": "resilience_rate_limit_hot_key · ops_per_sec",
+            "value": 99047.8,
+            "unit": "ops/s",
+            "extra": "10 keys, one key always answers 429 (Retry-After: 30). Sleeps are simulated"
+          },
+          {
+            "name": "resilience_async_rate_limit_10pct · ops_per_sec",
+            "value": 45522,
+            "unit": "ops/s",
+            "extra": "Async, 20 concurrent tasks, 10 keys, 10% 429s. Sleeps are simulated"
+          },
+          {
+            "name": "resilience_server_errors_5pct · ops_per_sec",
+            "value": 88320.1,
+            "unit": "ops/s",
+            "extra": "10 keys, 5% of responses are 503. Sleeps are simulated"
+          },
+          {
+            "name": "resilience_client_errors_5pct · ops_per_sec",
+            "value": 94021.5,
+            "unit": "ops/s",
+            "extra": "10 keys, 5% of requests hit a 404 endpoint (must not destroy the key pool)"
+          },
+          {
+            "name": "resilience_host_down · ops_per_sec",
+            "value": 16047.2,
+            "unit": "ops/s",
+            "extra": "Host answers 503 to everything, no circuit breaker (baseline for the next scenario)"
+          },
+          {
+            "name": "resilience_host_down_breaker · ops_per_sec",
+            "value": 127952,
+            "unit": "ops/s",
+            "extra": "Host answers 503 to everything, circuit breaker on: fail fast instead of hammering it"
+          },
+          {
+            "name": "resilience_quota_reactive · ops_per_sec",
+            "value": 77639.6,
+            "unit": "ops/s",
+            "extra": "10 keys x 10 req/min quota; rotator reacts to 429 only (header hints off)"
+          },
+          {
+            "name": "resilience_quota_headers · ops_per_sec",
+            "value": 70745.8,
+            "unit": "ops/s",
+            "extra": "10 keys x 10 req/min quota; rotator skips keys at X-RateLimit-Remaining: 0"
+          },
+          {
+            "name": "resilience_quota_token_bucket · ops_per_sec",
+            "value": 68112.7,
+            "unit": "ops/s",
+            "extra": "10 keys x 10 req/min quota; client-side token bucket key_rate_limit=(10, 60)"
+          },
+          {
+            "name": "select_round_robin_10_keys · ops_per_sec",
+            "value": 1178754,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 10 keys and metrics"
+          },
+          {
+            "name": "select_round_robin_1000_keys · ops_per_sec",
+            "value": 1067067.1,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 1000 keys and metrics"
+          },
+          {
+            "name": "select_random_10_keys · ops_per_sec",
+            "value": 991887.4,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 10 keys and metrics"
+          },
+          {
+            "name": "select_random_1000_keys · ops_per_sec",
+            "value": 944483.8,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 1000 keys and metrics"
+          },
+          {
+            "name": "select_weighted_10_keys · ops_per_sec",
+            "value": 909846.2,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 10 keys and metrics"
+          },
+          {
+            "name": "select_weighted_1000_keys · ops_per_sec",
+            "value": 788726,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 1000 keys and metrics"
+          },
+          {
+            "name": "select_lru_10_keys · ops_per_sec",
+            "value": 554686.1,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 10 keys and metrics"
+          },
+          {
+            "name": "select_lru_1000_keys · ops_per_sec",
+            "value": 11372.1,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 1000 keys and metrics"
+          },
+          {
+            "name": "select_health_based_10_keys · ops_per_sec",
+            "value": 578092.9,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 10 keys and metrics"
+          },
+          {
+            "name": "select_health_based_1000_keys · ops_per_sec",
+            "value": 12414.5,
+            "unit": "ops/s",
+            "extra": "strategy.get_next_key() with 1000 keys and metrics"
+          },
+          {
+            "name": "e2e_sync_local_http · ops_per_sec",
+            "value": 1795.9,
+            "unit": "ops/s",
+            "extra": "Real HTTP round-trips to a local server (sync, keep-alive)"
+          },
+          {
+            "name": "e2e_async_local_http · ops_per_sec",
+            "value": 4918.5,
             "unit": "ops/s",
             "extra": "Real HTTP round-trips to a local server (async, 50 concurrent)"
           }
