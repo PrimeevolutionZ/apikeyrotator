@@ -12,6 +12,7 @@ Real-world examples for APIKeyRotator. All examples assume Python 3.12+ and
 - [Web Scraping](#web-scraping)
 - [Data Collection](#data-collection)
 - [API Integration](#api-integration)
+- [Payments and Orders](#payments-and-orders)
 - [Asynchronous Operations](#asynchronous-operations)
 - [Production Patterns](#production-patterns)
 - [Advanced Patterns](#advanced-patterns)
@@ -51,7 +52,41 @@ if response.status_code == 201:
 ```
 
 Without an `Idempotency-Key`, a POST that gets a `500`/`502`/`504` or a read
-timeout is **not** retried (it may already have been executed).
+timeout is **not** retried (it may already have been executed). With
+`auto_idempotency_key=True` the rotator adds one to every POST/PATCH itself - see
+[Payments and Orders](#payments-and-orders).
+
+### Choosing the Auth Header
+
+```python
+from apikeyrotator import APIKeyRotator
+
+APIKeyRotator(api_keys=["key1"], auth="bearer")                          # Authorization: Bearer key1
+APIKeyRotator(api_keys=["key1"], auth="x-api-key")                       # X-API-Key: key1
+APIKeyRotator(api_keys=["key1"], auth=("Authorization", "Token {key}"))  # Authorization: Token key1
+APIKeyRotator(api_keys=["key1"], auth=("x-goog-api-key", "{key}"))       # x-goog-api-key: key1
+```
+
+Without `auth=`: `X-API-Key` for 32-character keys, `Authorization: Bearer` for the rest.
+
+### Wrong Auth Header? The Keys Are Kept
+
+```python
+from apikeyrotator import APIKeyRotator, AuthenticationError
+
+rotator = APIKeyRotator(api_keys=["key1", "key2"])
+try:
+    rotator.get("https://api.example.com/data")
+except AuthenticationError as e:
+    # "All 2 key(s) were rejected (401) and no request has succeeded yet. ...
+    #  Sent: 'Authorization: Bearer key1****'. Set auth='bearer', auth='x-api-key', ..."
+    print(e.auth_header, e.statuses)
+    rotator.auth = "x-api-key"          # fix it - both keys are still in rotation
+    response = rotator.get("https://api.example.com/data")
+```
+
+Keys are removed for `401`/`403` only once the API has accepted a request, i.e. when
+the header format is known to be right.
 
 ### Custom Authorization Header
 
@@ -65,8 +100,8 @@ rotator = APIKeyRotator(
 )
 ```
 
-When the callback sets `Authorization` or `X-API-Key` (case-insensitive), the
-rotator does not add its own auth header.
+When the callback sets `Authorization` / `X-API-Key` (case-insensitive) or any
+header containing the key, the rotator does not add its own auth header.
 
 ### httpx backend and HTTP/2
 
@@ -78,6 +113,24 @@ rotator = APIKeyRotator(api_keys=["key1", "key2"], http_backend="httpx", http2=T
 response = rotator.get("https://api.example.com/data")   # httpx.Response
 print(response.http_version, response.json())
 ```
+
+### Same Response Object for Every HTTP Client
+
+```python
+from apikeyrotator import APIKeyRotator
+
+for backend in ["requests", "httpx"]:
+    rotator = APIKeyRotator(api_keys=["key1"], http_backend=backend, unified_response=True)
+    r = rotator.get("https://api.example.com/users")
+    print(type(r).__name__, r.status_code, r.ok, r.headers["content-type"], r.json())
+    # UnifiedResponse 200 True application/json [...]   - identical for both backends
+
+    r.raise_for_status()                  # HTTPStatusError (.response) for 4xx/5xx
+    print(r.headers.get_list("Set-Cookie"), r.elapsed.total_seconds(), type(r.native))
+```
+
+The async rotator returns the same `UnifiedResponse` (see
+[Asynchronous Operations](#asynchronous-operations)). Not usable with `stream=True`.
 
 ---
 
@@ -566,7 +619,104 @@ print(f"{result['user']['name']} has {len(result['user']['posts'])} posts")
 
 ---
 
+## Payments and Orders
+
+A client for an API with side effects (charges, orders, messages). The rotator never
+repeats a request that may have been executed; with idempotency keys the retries become
+safe and reuse the same API key.
+
+```python
+import logging
+from apikeyrotator import APIKeyRotator, AllKeysExhaustedError
+
+log = logging.getLogger("billing")
+
+payments = APIKeyRotator(
+    api_keys=["sk_live_1", "sk_live_2"],   # keys of the same account
+    auto_idempotency_key=True,             # Idempotency-Key on every POST/PATCH
+    total_timeout=20,                      # a user is waiting - bound the whole request
+    unified_response=True,
+)
+
+
+def charge(order_id: str, amount: int) -> dict | None:
+    try:
+        response = payments.post(
+            "https://api.example.com/v1/charges",
+            json={"amount": amount, "order": order_id},
+            # a stable key per order lets you retry this call later without charging twice
+            headers={"Idempotency-Key": f"charge-{order_id}"},
+        )
+    except AllKeysExhaustedError as e:
+        if e.possibly_processed:
+            log.error("Charge %s may have happened - check it before retrying", order_id)
+        else:
+            log.warning("Charge %s was not executed - safe to retry later", order_id)
+        return None
+
+    if not response.ok:          # a 500 without idempotency, a 4xx...: returned, never retried
+        log.error("Charge %s failed: %s %s", order_id, response.status_code, response.text)
+        return None
+    return response.json()
+```
+
+What happens on failures:
+
+| Server answer | What the rotator does |
+|---|---|
+| `429`, `503` | retries (the charge was not executed), possibly with another key |
+| `500`, read timeout | retries **with the same key** (the idempotency key makes it safe); without an idempotency key the response / exception is returned to you |
+| `401` on one key | switches to another key |
+| still failing | `AllKeysExhaustedError(possibly_processed=True)` |
+
+With `FallbackRouter`, a charge that may have been executed by the first provider is
+**not** sent to the second one - the error is raised instead:
+
+```python
+from apikeyrotator import APIKeyRotator, FallbackRouter, ProviderRoute
+
+router = FallbackRouter([
+    ProviderRoute(name="stripe", rotator=APIKeyRotator(api_keys=["sk_1"], auto_idempotency_key=True)),
+    ProviderRoute(name="backup-psp", rotator=APIKeyRotator(api_keys=["bk_1"], auto_idempotency_key=True)),
+])
+router.post("https://api.example.com/v1/charges", json={"amount": 1000})
+```
+
+---
+
 ## Asynchronous Operations
+
+### Same Code for aiohttp and httpx
+
+```python
+import asyncio
+from apikeyrotator import AsyncAPIKeyRotator
+
+async def main():
+    for backend in ["aiohttp", "httpx"]:
+        async with AsyncAPIKeyRotator(api_keys=["key1", "key2"], http_backend=backend,
+                                      unified_response=True) as rotator:
+            r = await rotator.get("https://api.example.com/users")
+            print(r.status_code, r.json())    # json() is not awaited - the body is already read
+
+asyncio.run(main())
+```
+
+### Keys From a Secret Store, Loaded in Your Event Loop
+
+```python
+import asyncio
+from apikeyrotator import AsyncAPIKeyRotator, AWSSecretsManagerProvider
+
+async def main():
+    rotator = AsyncAPIKeyRotator(secret_provider=AWSSecretsManagerProvider(secret_name="prod/keys"))
+    print(rotator.keys)               # [] - nothing loaded yet, the loop is not blocked
+    async with rotator:               # keys are loaded here (or on the first request)
+        print(rotator.key_count)
+        await rotator.get("https://api.example.com/data")
+
+asyncio.run(main())
+```
 
 ### Concurrent Data Fetching
 

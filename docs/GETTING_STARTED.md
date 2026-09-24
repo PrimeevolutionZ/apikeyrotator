@@ -65,6 +65,25 @@ async def main():
 asyncio.run(main())
 ```
 
+### One response type for every client
+
+With `unified_response=True` the sync and async rotators return the same object for
+requests, httpx and aiohttp - and `json()` is never awaited:
+
+```python
+import asyncio
+from apikeyrotator import APIKeyRotator, AsyncAPIKeyRotator
+
+print(APIKeyRotator(api_keys=["key1"], unified_response=True).get("https://api.example.com/data").json())
+
+async def main():
+    async with AsyncAPIKeyRotator(api_keys=["key1"], unified_response=True) as rotator:
+        response = await rotator.get("https://api.example.com/data")
+        print(response.status_code, response.json())
+
+asyncio.run(main())
+```
+
 ### Seeing what happens
 
 The library logs through the standard `logging` module but does not print

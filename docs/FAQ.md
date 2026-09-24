@@ -154,6 +154,21 @@ become safe, keep the same API key, and a final error tells you whether the oper
 may have happened (`AllKeysExhaustedError.possibly_processed`). Details:
 [Payments, orders and other side effects](RESILIENCE.md#payments-orders-and-other-side-effects).
 
+### Can I get the same response object from requests, httpx and aiohttp?
+
+Yes: `unified_response=True`. Every rotator and backend then returns a
+`UnifiedResponse` (`status_code`, case-insensitive `headers`, `content`, `text`,
+`json()`, `ok`, `raise_for_status()`, the client's own object as `native`), with the
+body already read - so async code calls `response.json()` without `await`:
+
+```python
+from apikeyrotator import AsyncAPIKeyRotator
+
+async def fetch():
+    async with AsyncAPIKeyRotator(api_keys=["key1"], http_backend="httpx", unified_response=True) as r:
+        return (await r.get("https://api.example.com/data")).json()
+```
+
 ### Can I use it with any API?
 
 Yes. Say how the API expects the key with `auth=` - `"bearer"`, `"x-api-key"` or
