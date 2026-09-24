@@ -1,6 +1,6 @@
 # Contributing to APIKeyRotator
 
-Thank you for your interest in contributing! 🎉 Bug fixes, features, tests and
+Thank you for your interest in contributing! Bug fixes, features, tests and
 documentation improvements are all welcome.
 
 ## Table of Contents
@@ -58,7 +58,7 @@ What happened and what you expected.
 **To reproduce**
 ```python
 from apikeyrotator import APIKeyRotator
-rotator = APIKeyRotator(api_keys=["key1"], load_env_file=False)
+rotator = APIKeyRotator(api_keys=["key1"])
 ...
 ```
 
@@ -187,7 +187,7 @@ from unittest.mock import Mock, patch
 from apikeyrotator import APIKeyRotator
 
 def test_switches_key_on_429(virtual_clock):
-    rotator = APIKeyRotator(api_keys=["k1", "k2"], load_env_file=False)
+    rotator = APIKeyRotator(api_keys=["k1", "k2"])
     with patch("requests.Session.request") as request:
         request.side_effect = [
             Mock(status_code=429, headers={"Retry-After": "30"}, content=b""),
@@ -207,7 +207,7 @@ from apikeyrotator import AsyncAPIKeyRotator
 async def test_async_get():
     response = AsyncMock(status=200, headers={})
     response.json = AsyncMock(return_value={"ok": True})
-    async with AsyncAPIKeyRotator(api_keys=["k1"], load_env_file=False) as rotator:
+    async with AsyncAPIKeyRotator(api_keys=["k1"]) as rotator:
         with patch("aiohttp.ClientSession.request", AsyncMock(return_value=response)):
             result = await rotator.get("https://api.example.com/data")
             assert await result.json() == {"ok": True}
@@ -239,7 +239,7 @@ calls, waiting time, success rate, memory). See [benchmarks/README.md](benchmark
 - Every Python example must run against the current API. `scripts/check_docs.py`
   verifies imports, parameters, methods and links in all Markdown files (also in CI).
   Fence non-runnable signatures as ` ```python signature `.
-- Keep examples short, use `load_env_file=False` in tests, and never put real keys in docs.
+- Keep examples short and never put real keys in docs.
 
 ## Release Process
 
@@ -275,6 +275,6 @@ By contributing, you agree that your contributions are licensed under the MIT Li
 
 <div align="center">
 
-**Thank you for contributing to APIKeyRotator! 🎉**
+**Thank you for contributing to APIKeyRotator! **
 
 </div>

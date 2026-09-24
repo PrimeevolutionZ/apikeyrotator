@@ -66,7 +66,8 @@ from apikeyrotator import APIKeyRotator
 
 rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"])   # directly
 rotator = APIKeyRotator(api_keys="key1,key2,key3")           # comma-separated string
-rotator = APIKeyRotator()                                    # API_KEYS env variable or .env file
+rotator = APIKeyRotator()                                    # API_KEYS env variable
+rotator = APIKeyRotator(load_env_file=True)                  # ...after loading ./.env
 rotator = APIKeyRotator(env_var="MY_CUSTOM_KEYS")            # another variable
 ```
 
@@ -145,17 +146,16 @@ your endpoint is idempotent. `GET`, `PUT`, `DELETE` are always retried.
 
 ### Can I use it with any API?
 
-Yes. If the request has no `Authorization`/`X-API-Key` header, the rotator adds
-`Authorization: Bearer <key>` for keys starting with `sk-`/`pk-`,
-`X-API-Key: <key>` for 32-character keys, and `Authorization: Key <key>` otherwise.
-For anything else use `header_callback`:
+Yes. Say how the API expects the key with `auth=` - `"bearer"`, `"x-api-key"` or
+any `(header, template)`:
 
 ```python
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    header_callback=lambda key, headers: {"Authorization": f"Token {key}"},
-)
+rotator = APIKeyRotator(api_keys=["key1"], auth=("Authorization", "Token {key}"))
 ```
+
+Without `auth=`, 32-character keys go in `X-API-Key` and everything else in
+`Authorization: Bearer <key>`. Headers that need more than the key (several headers,
+signatures) come from `header_callback`.
 
 ### How do I make POST/PUT/PATCH/DELETE requests?
 
@@ -195,9 +195,11 @@ want an exception.
 
 ### Why are my requests failing immediately?
 
-1. **Invalid keys** - every key gets 401/403 and is removed (`rotator.key_count == 0`).
-2. **Wrong URL / parameters** - 4xx responses are returned without retries.
-3. **Wrong auth header** - the API expects a different header; use `header_callback`.
+1. **Wrong auth header** - every key gets 401/403 before anything succeeded: you get an
+   `AuthenticationError` showing the header that was sent; set `auth=`. The keys are kept.
+2. **Invalid keys** - after requests have succeeded, keys answering 401/403 are removed
+   (`rotator.key_count`); when none are left you get `AllKeysExhaustedError`.
+3. **Wrong URL / parameters** - 4xx responses are returned without retries.
 4. **Open circuit** - the host failed repeatedly (`rotator.get_circuit_states()`).
 
 Turn on logging to see what happens:
@@ -348,16 +350,17 @@ router = FallbackRouter([
 response = router.get("https://api.a.com/v1/data")
 ```
 
-### How do I disable .env file loading?
+### Does the rotator read .env files?
 
-`APIKeyRotator(api_keys=[...], load_env_file=False)`.
+Only with `load_env_file=True` (needs `python-dotenv`): then the `.env` of the working
+directory is loaded into `os.environ` before keys are read. By default the library
+reads no files and doesn't change the environment.
 
 ### What is the configuration file for?
 
-`config_file` (default `rotator_config.json`) is only **read**, never written. With
+`config_file` is only **read** (never written), and only when you pass one. With
 `save_sensitive_headers=True` its `successful_headers` section adds extra headers
-per domain (auth headers in it are ignored). If the file doesn't exist, nothing
-happens - no need to disable anything.
+per domain (auth headers in it are ignored).
 
 ### How do I enable debug logging?
 
@@ -394,7 +397,7 @@ from apikeyrotator import APIKeyRotator
 def test_api_call():
     with requests_mock.Mocker() as m:
         m.get("https://api.example.com/data", json={"result": "success"})
-        rotator = APIKeyRotator(api_keys=["test_key"], load_env_file=False)
+        rotator = APIKeyRotator(api_keys=["test_key"])
         assert rotator.get("https://api.example.com/data").json() == {"result": "success"}
 ```
 

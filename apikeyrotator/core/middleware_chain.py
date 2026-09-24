@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import logging
+import warnings
 from typing import Any
 
 from apikeyrotator.middleware import ErrorInfo, RequestInfo, ResponseInfo, RotatorMiddleware
@@ -11,6 +12,25 @@ async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+_HOOKS = (("before_request", "before_request_sync"),
+          ("after_request", "after_request_sync"),
+          ("on_error", "on_error_sync"))
+
+
+def _overrides(middleware: Any, name: str) -> bool:
+    """True if the middleware implements `name` itself (not the RotatorMiddleware default)."""
+    impl = getattr(type(middleware), name, None)
+    if impl is None:
+        return False
+    return impl is not getattr(RotatorMiddleware, name, None)
+
+
+def _async_hook(middleware: Any, name: str, sync_name: str):
+    """The async hook, or the sync one for middlewares that only implement sync hooks."""
+    hook = getattr(middleware, name, None)
+    return hook if hook is not None else getattr(middleware, sync_name, None)
 
 
 def _apply_request_info(request_info: RequestInfo, request_kwargs: dict[str, Any]) -> None:
@@ -30,6 +50,23 @@ class MiddlewareChain:
     def __init__(self, middlewares: list[RotatorMiddleware] | None, logger: logging.Logger):
         self.middlewares: list[RotatorMiddleware] = middlewares if middlewares is not None else []
         self.logger = logger
+
+    def warn_async_only(self) -> None:
+        """Warns about middlewares whose hooks a sync rotator would never call."""
+        for middleware in self.middlewares:
+            missing = [
+                name for name, sync_name in _HOOKS
+                if _overrides(middleware, name) and not _overrides(middleware, sync_name)
+            ]
+            if missing:
+                name = type(middleware).__name__
+                message = (
+                    f"{name} implements only async hooks ({', '.join(missing)}); APIKeyRotator "
+                    f"calls the *_sync hooks, so they will never run. Implement "
+                    f"{', '.join(m + '_sync' for m in missing)} or use AsyncAPIKeyRotator."
+                )
+                warnings.warn(message, UserWarning, stacklevel=4)
+                self.logger.warning(message)
 
     # --- sync ---
 
@@ -68,7 +105,7 @@ class MiddlewareChain:
 
     async def before(self, request_info: RequestInfo, request_kwargs: dict[str, Any]) -> ResponseInfo | None:
         for middleware in self.middlewares:
-            hook = getattr(middleware, 'before_request', None)
+            hook = _async_hook(middleware, 'before_request', 'before_request_sync')
             if hook is None:
                 continue
             result = await _maybe_await(hook(request_info))
@@ -81,7 +118,7 @@ class MiddlewareChain:
 
     async def after(self, response_info: ResponseInfo) -> None:
         for middleware in self.middlewares:
-            hook = getattr(middleware, 'after_request', None)
+            hook = _async_hook(middleware, 'after_request', 'after_request_sync')
             if hook is not None:
                 result = await _maybe_await(hook(response_info))
                 if isinstance(result, ResponseInfo):
@@ -89,7 +126,7 @@ class MiddlewareChain:
 
     async def on_error(self, error_info: ErrorInfo) -> None:
         for middleware in self.middlewares:
-            hook = getattr(middleware, 'on_error', None)
+            hook = _async_hook(middleware, 'on_error', 'on_error_sync')
             if hook is None:
                 continue
             try:

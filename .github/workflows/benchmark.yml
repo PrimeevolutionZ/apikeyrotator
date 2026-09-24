@@ -41,7 +41,7 @@ jobs:
 
       - name: Run benchmark
         run: |
-          timeout 1800 python benchmarks/bench_core.py -n 3000 -r 3 --scenario-timeout 120 \
+          timeout 1800 python benchmarks/bench_core.py -n 5000 -r 3 --scenario-timeout 120 \
             --save bench.json --markdown bench.md --export-github bench
 
       - name: Job summary

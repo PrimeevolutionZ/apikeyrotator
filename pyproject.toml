@@ -13,8 +13,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apikeyrotator"
-version = "0.8.1"
-description = "🚀 Powerful and simple API key rotator for bypassing rate limits and handling errors"
+version = "0.8.2"
+description = "Powerful and simple API key rotator for bypassing rate limits and handling errors"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}

@@ -151,7 +151,7 @@ class CachingMiddleware(RotatorMiddleware):
                 if time.time() - cached['timestamp'] < self.ttl:
                     self.hits += 1
                     self.cache.move_to_end(cache_key)
-                    self.logger.debug(f"✅ Cache HIT for {request_info.url}")
+                    self.logger.debug(f"Cache HIT for {request_info.url}")
                     return cached['response']
                 self._delete_entry(cache_key)
             self.misses += 1

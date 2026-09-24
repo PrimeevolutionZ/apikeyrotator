@@ -90,7 +90,7 @@ class StateSync:
             self.invalid_ids.add(kid)
             key = by_id.get(kid)
             if key is not None:
-                self.logger.warning(f"❌ Key {mask_key(key)} was invalidated by another instance")
+                self.logger.warning(f"Key {mask_key(key)} was invalidated by another instance")
                 self._on_invalid(key)
 
     # --- push ---

@@ -4,11 +4,11 @@
 
 | Version | Supported |
 |---|---|
-| 0.8.x | ✅ security fixes |
-| 0.7.x | ⚠️ upgrade recommended (last version supporting Python < 3.12) |
-| < 0.7 | ❌ please upgrade (0.6.x removes working keys on 4xx responses) |
+| 0.8.x | Yes (security fixes) |
+| 0.7.x | Upgrade recommended (last version supporting Python < 3.12) |
+| < 0.7 | No, please upgrade (0.6.x removes working keys on 4xx responses) |
 
-## 🚨 Reporting a Vulnerability
+## Reporting a Vulnerability
 
 **Do not open a public issue.** Report privately via
 [GitHub Security Advisories](https://github.com/PrimeevolutionZ/apikeyrotator/security/advisories/new).
@@ -26,11 +26,11 @@ Description / Impact / Affected versions / Steps to reproduce / Proof of concept
 fixes for critical issues within 24-48 hours, high within a week, medium within two
 weeks, low within a month. Disclosure is coordinated after a fixed release.
 
-## 🔒 Security Best Practices
+## Security Best Practices
 
 ### API Key Management
 
-**✅ Do**
+**Do**
 
 - Keep keys in environment variables, `.env` files (git-ignored) or a secret manager.
 - Use separate keys for development and production; rotate keys regularly.
@@ -45,7 +45,7 @@ rotator = APIKeyRotator(
 )
 ```
 
-**❌ Don't**
+**Don't**
 
 - Hardcode keys in source code or commit `.env` files.
 - Log `rotator.keys` or print keys - use `rotator.export_config()` (masked) instead.
@@ -134,7 +134,7 @@ rotator = APIKeyRotator(api_keys=["key1"], http_client_kwargs={"verify": "/etc/s
 
 (`verify=False` per request works with the requests backend but is not recommended.)
 
-## 🔐 Security Features
+## Security Features
 
 - **Invalid keys are dropped**: keys answering `401`/`403` are removed from rotation
   (and, with a shared state backend, from all instances); background refresh does not
@@ -147,7 +147,7 @@ rotator = APIKeyRotator(api_keys=["key1"], http_client_kwargs={"verify": "/etc/s
 - **Safe retries**: non-idempotent requests are not replayed after the server may have
   executed them.
 
-## 🔍 Self-Audit Checklist
+## Self-Audit Checklist
 
 - [ ] Keys come from environment variables or a secret manager
 - [ ] No keys in source code, git history or logs
@@ -168,18 +168,18 @@ detect-secrets scan          # secrets in the code base
 pip-audit                    # known vulnerabilities in dependencies
 ```
 
-## 📜 Security Updates
+## Security Updates
 
 Security fixes are released as patch versions (e.g. 0.8.0 → 0.8.1) and listed in the
 [CHANGELOG](CHANGELOG.md). Watch the
 [GitHub repository](https://github.com/PrimeevolutionZ/apikeyrotator) (Releases /
 Security advisories) to be notified.
 
-## 📚 Additional Resources
+## Additional Resources
 
 - [OWASP API Security Top 10](https://owasp.org/www-project-api-security/)
 - [GitHub code security docs](https://docs.github.com/en/code-security)
 
 ---
 
-**Last updated:** September 2026 · **Version:** 0.8.1
+**Last updated:** September 2026 · **Version:** 0.8.2

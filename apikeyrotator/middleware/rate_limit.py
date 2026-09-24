@@ -166,7 +166,7 @@ class RateLimitMiddleware(RotatorMiddleware):
                     wait_time += jitter
 
                     self.logger.warning(
-                        f"⏸️ Rate limit for key {key[:4]}****. Waiting {wait_time:.1f}s "
+                        f"Rate limit for key {key[:4]}****. Waiting {wait_time:.1f}s "
                         f"(remaining={limit_info.get('remaining', '?')})"
                     )
 
@@ -210,7 +210,7 @@ class RateLimitMiddleware(RotatorMiddleware):
                 }
 
             self.logger.warning(
-                f"⚠️ Rate limit hit for key {key[:4]}****. "
+                f"Rate limit hit for key {key[:4]}****. "
                 f"Reset at {reset_time}"
             )
 

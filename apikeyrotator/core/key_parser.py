@@ -13,7 +13,7 @@ def _dedupe(keys: list[str], logger: logging.Logger) -> list[str]:
     """Removes duplicate keys while preserving order."""
     unique = list(dict.fromkeys(keys))
     if len(unique) != len(keys):
-        logger.warning(f"⚠️ Removed {len(keys) - len(unique)} duplicate API key(s)")
+        logger.warning(f"Removed {len(keys) - len(unique)} duplicate API key(s)")
     return unique
 
 
@@ -69,15 +69,15 @@ def parse_keys(
             # Cleaning list from empty strings and spaces
             keys = [k.strip() for k in api_keys if isinstance(k, str) and k.strip()]
         else:
-            logger.error("❌ API keys must be a list or comma-separated string.")
-            raise NoAPIKeysError("❌ API keys must be a list or comma-separated string")
+            logger.error("API keys must be a list or comma-separated string.")
+            raise NoAPIKeysError("API keys must be a list or comma-separated string")
 
         if not keys:
-            logger.error("❌ No API keys provided in the api_keys parameter.")
-            raise NoAPIKeysError("❌ No API keys provided in the api_keys parameter")
+            logger.error("No API keys provided in the api_keys parameter.")
+            raise NoAPIKeysError("No API keys provided in the api_keys parameter")
 
         keys = _dedupe(keys, logger)
-        logger.debug(f"✅ Parsed {len(keys)} keys from api_keys parameter")
+        logger.debug(f"Parsed {len(keys)} keys from api_keys parameter")
         return keys
 
     # Case 2: Loading from environment variable
@@ -85,18 +85,20 @@ def parse_keys(
 
     if keys_str is None:
         error_msg = (
-            f"❌ No API keys found.\n"
+            f"No API keys found.\n"
             f"   Please either:\n"
             f"   1. Pass keys directly: APIKeyRotator(api_keys=[\"key1\", \"key2\"])\n"
             f"   2. Set environment variable: export {env_var}='key1,key2'\n"
-            f"   3. Create .env file with: {env_var}=key1,key2\n"
+            f"   3. Put {env_var}=key1,key2 in a .env file and pass load_env_file=True\n"
         )
+        if os.path.exists(".env"):
+            error_msg += "   (a .env file exists in the current directory - pass load_env_file=True to read it)\n"
         logger.error(error_msg)
         raise NoAPIKeysError(error_msg)
 
     if not keys_str.strip():
         error_msg = (
-            f"❌ Environment variable ${env_var} is empty.\n"
+            f"Environment variable ${env_var} is empty.\n"
             f"   Please set it with: export {env_var}='your_key1,your_key2'"
         )
         logger.error(error_msg)
@@ -107,14 +109,14 @@ def parse_keys(
 
     if not keys:
         error_msg = (
-            f"❌ No valid API keys found in ${env_var}.\n"
+            f"No valid API keys found in ${env_var}.\n"
             f"   Format should be: key1,key2,key3"
         )
         logger.error(error_msg)
         raise NoAPIKeysError(error_msg)
 
     keys = _dedupe(keys, logger)
-    logger.debug(f"✅ Parsed {len(keys)} keys from environment variable ${env_var}")
+    logger.debug(f"Parsed {len(keys)} keys from environment variable ${env_var}")
     return keys
 
 
@@ -195,6 +197,6 @@ def filter_valid_keys(
         if validate_key_format(key, key_format):
             valid_keys.append(key)
         else:
-            logger.warning(f"⚠️ Skipping invalid key: {key[:8]}...")
+            logger.warning(f"Skipping invalid key: {key[:8]}...")
 
     return valid_keys

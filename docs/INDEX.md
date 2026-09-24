@@ -2,7 +2,7 @@
 
 Welcome to the complete documentation for **APIKeyRotator** - a powerful, simple, and resilient API key rotator for Python.
 
-## 📚 Documentation Overview
+## Documentation Overview
 
 This documentation will help you get started with APIKeyRotator and master its advanced features.
 
@@ -22,7 +22,7 @@ This documentation will help you get started with APIKeyRotator and master its a
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 New to APIKeyRotator? Start here!
 
@@ -53,7 +53,7 @@ print(response.json())
 
 ---
 
-## 📖 Documentation Sections
+## Documentation Sections
 
 ### [Getting Started Guide](GETTING_STARTED.md)
 
@@ -214,7 +214,7 @@ Quick answers to frequently asked questions.
 
 ---
 
-## 🎯 Quick Reference
+## Quick Reference
 
 ### Common Tasks
 
@@ -309,7 +309,7 @@ print(f"Success rate: {metrics['success_rate']:.2%}")
 
 ---
 
-## 🔑 Key Features
+## Key Features
 
 ### Effortless Integration
 Familiar `requests`-style API; works with `requests`, `aiohttp` or `httpx` (HTTP/2).
@@ -358,7 +358,7 @@ Token buckets per key and shared limits/rejected keys across processes with Redi
 
 ---
 
-## 💡 Use Cases
+## Use Cases
 
 ### Web Scraping
 Rotate through proxies and User-Agents while respecting rate limits.
@@ -387,7 +387,7 @@ Production-grade features with secret providers, metrics, and middleware.
 
 ---
 
-## 🛠️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -423,27 +423,27 @@ rotator = APIKeyRotator(
 
 ---
 
-## 📊 Comparison
+## Comparison
 
 ### vs Manual Key Management
 
 | Feature              | Manual              | APIKeyRotator   |
 |----------------------|---------------------|-----------------|
-| Key rotation         | ❌ Manual            | ✅ Automatic     |
-| Retry logic          | ❌ Custom code       | ✅ Built-in      |
-| Rate limit handling  | ❌ Manual tracking   | ✅ Automatic     |
-| Error classification | ❌ Status codes only | ✅ Intelligent   |
-| Anti-bot features    | ❌ Not included      | ✅ Comprehensive |
-| Connection pooling   | ❌ Manual            | ✅ Built-in      |
-| Circuit breaker      | ❌ Custom code       | ✅ Per host      |
-| Shared limits (Redis)| ❌ Custom code       | ✅ Built-in      |
-| Middleware system    | ❌ Not available     | ✅ Full support  |
-| Metrics collection   | ❌ Custom code       | ✅ Built-in      |
-| Secret providers     | ❌ Manual            | ✅ AWS, GCP, etc |
+| Key rotation         | Manual            | Automatic     |
+| Retry logic          | Custom code       | Built-in      |
+| Rate limit handling  | Manual tracking   | Automatic     |
+| Error classification | Status codes only | Intelligent   |
+| Anti-bot features    | Not included      | Comprehensive |
+| Connection pooling   | Manual            | Built-in      |
+| Circuit breaker      | Custom code       | Per host      |
+| Shared limits (Redis)| Custom code       | Built-in      |
+| Middleware system    | Not available     | Full support  |
+| Metrics collection   | Custom code       | Built-in      |
+| Secret providers     | Manual            | AWS, GCP, etc |
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 APIKeyRotator is open-source! We welcome contributions.
 
@@ -457,7 +457,7 @@ APIKeyRotator is open-source! We welcome contributions.
 
 ---
 
-## 📝 License
+## License
 
 APIKeyRotator is distributed under the MIT License.
 
@@ -465,7 +465,7 @@ See [LICENSE](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/LICEN
 
 ---
 
-## 🔗 Links
+## Links
 
 - **GitHub Repository:** [PrimeevolutionZ/apikeyrotator](https://github.com/PrimeevolutionZ/apikeyrotator)
 - **PyPI Package:** [pypi.org/project/apikeyrotator](https://pypi.org/project/apikeyrotator/)
@@ -473,7 +473,7 @@ See [LICENSE](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/LICEN
 
 ---
 
-## 📞 Support
+## Support
 
 Need help? Here's how to get support:
 
@@ -484,7 +484,7 @@ Need help? Here's how to get support:
 
 ---
 
-## 🗺️ Documentation Roadmap
+## Documentation Roadmap
 
 Recommended reading order:
 
@@ -502,24 +502,31 @@ Recommended reading order:
 
 ---
 
-## 🆕 What's New in 0.8.1
+## What's New in 0.8.2
 
-- 🧱 **Core split into components** with one request loop shared by the sync and async rotators (public API unchanged)
-- ⏳ `AsyncAPIKeyRotator` loads keys from a secret provider on first use in your event loop (`await rotator.load_keys()`)
-- 📊 Published benchmark results: [RESULTS.md](../benchmarks/RESULTS.md) and [history charts](https://primeevolutionz.github.io/apikeyrotator/bench/)
+- `auth=` to choose how the key is sent (`"bearer"`, `"x-api-key"`, any header/template)
+- A wrong auth header raises `AuthenticationError` with the header that was sent - keys are no longer thrown away
+- No implicit `.env` / config file reads (`load_env_file=True`, `config_file=` to opt in)
+- Same `should_retry_callback` and middleware behaviour in sync and async rotators
 
-## 🆕 What's New in 0.8.0
+## What's New in 0.8.1
 
-- 🧯 **Resilience**: request deadlines (`total_timeout`), per-host circuit breaker, safe retries of POST/PATCH
-- 🚦 **Rate limits**: client-side token bucket per key, `X-RateLimit-Remaining` hints
-- 🔗 **Shared state**: `RedisStateBackend` shares limits, rejected keys and token buckets between processes
-- 🔄 **Background key refresh** from secret providers
-- 🌐 **httpx backend** with HTTP/2, `failover` rotation strategy
-- 🪶 **Leaner core**: 69 ms import, ~230 bytes per key; Python 3.12+
-- 🔇 The library no longer configures logging output (use `logging.basicConfig`)
+- **Core split into components** with one request loop shared by the sync and async rotators (public API unchanged)
+- `AsyncAPIKeyRotator` loads keys from a secret provider on first use in your event loop (`await rotator.load_keys()`)
+- Published benchmark results: [RESULTS.md](../benchmarks/RESULTS.md) and [history charts](https://primeevolutionz.github.io/apikeyrotator/bench/)
+
+## What's New in 0.8.0
+
+- **Resilience**: request deadlines (`total_timeout`), per-host circuit breaker, safe retries of POST/PATCH
+- **Rate limits**: client-side token bucket per key, `X-RateLimit-Remaining` hints
+- **Shared state**: `RedisStateBackend` shares limits, rejected keys and token buckets between processes
+- **Background key refresh** from secret providers
+- **httpx backend** with HTTP/2, `failover` rotation strategy
+- **Leaner core**: 69 ms import, ~230 bytes per key; Python 3.12+
+- The library no longer configures logging output (use `logging.basicConfig`)
 
 [View complete changelog](../CHANGELOG.md)
 
 ---
 
-**Happy coding with APIKeyRotator! 🚀**
+**Happy coding with APIKeyRotator! **

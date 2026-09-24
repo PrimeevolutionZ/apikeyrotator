@@ -209,14 +209,14 @@ class TestRequestBuilder:
     def test_auth_header_inference(self):
         assert infer_auth_header("sk-abc") == ("Authorization", "Bearer sk-abc")
         assert infer_auth_header("x" * 32) == ("X-API-Key", "x" * 32)
-        assert infer_auth_header("plain") == ("Authorization", "Key plain")
+        assert infer_auth_header("plain") == ("Authorization", "Bearer plain")
 
     def test_auth_cache_is_bounded(self, monkeypatch):
         monkeypatch.setattr("apikeyrotator.core.request_builder._AUTH_CACHE_SIZE", 3)
         builder = RequestBuilder()
         for i in range(10):
             headers, _ = builder.headers_and_cookies(f"key{i}", None, "https://x")
-            assert headers["Authorization"] == f"Key key{i}"
+            assert headers["Authorization"] == f"Bearer key{i}"
         assert len(builder._auth_cache) <= 3
 
     def test_user_agent_and_proxy_cycle(self):
@@ -380,3 +380,139 @@ class TestEngineCleanupWithBlockingBackend:
         with pytest.raises(KeyboardInterrupt):       # ...then the exception continues
             flow.send(None)
         assert backend.snapshot().rate_limited       # the rate limit reached shared state
+
+
+class TestAuthOption:
+    @pytest.mark.parametrize("auth, key, expected", [
+        (None, "sk-abc", ("Authorization", "Bearer sk-abc")),
+        (None, "plain-key", ("Authorization", "Bearer plain-key")),
+        (None, "x" * 32, ("X-API-Key", "x" * 32)),
+        ("bearer", "x" * 32, ("Authorization", "Bearer " + "x" * 32)),
+        ("x-api-key", "sk-abc", ("X-API-Key", "sk-abc")),
+        (("Authorization", "Token {key}"), "abc", ("Authorization", "Token abc")),
+        (("x-goog-api-key", "{key}"), "abc", ("x-goog-api-key", "abc")),
+    ])
+    def test_auth_modes(self, auth, key, expected):
+        rotator = APIKeyRotator(api_keys=[key], load_env_file=False, auth=auth)
+        headers, _ = rotator._prepare_headers_and_cookies(key, None, "https://x")
+        assert headers == {expected[0]: expected[1]}
+
+    def test_auth_false_sends_no_header(self):
+        rotator = APIKeyRotator(api_keys=["abc"], load_env_file=False, auth=False)
+        assert rotator._prepare_headers_and_cookies("abc", None, "https://x")[0] == {}
+
+    def test_invalid_auth(self):
+        with pytest.raises(ValueError, match="Unknown auth scheme"):
+            APIKeyRotator(api_keys=["abc"], load_env_file=False, auth="basic")
+        with pytest.raises(ValueError):
+            APIKeyRotator(api_keys=["abc"], load_env_file=False, auth=("X-Key", "no placeholder"))
+
+    def test_callback_sending_the_key_suppresses_default_header(self):
+        rotator = APIKeyRotator(api_keys=["abc"], load_env_file=False,
+                                header_callback=lambda key, h: {"x-goog-api-key": key})
+        headers, _ = rotator._prepare_headers_and_cookies("abc", None, "https://x")
+        assert headers == {"x-goog-api-key": "abc"}
+
+    def test_auth_can_be_changed_later(self):
+        rotator = APIKeyRotator(api_keys=["abc"], load_env_file=False)
+        rotator.auth = "x-api-key"
+        assert rotator._prepare_headers_and_cookies("abc", None, "https://x")[0] == {"X-API-Key": "abc"}
+
+
+class TestRejectionsBeforeAuthIsConfirmed:
+    def test_not_reported_to_shared_state_until_confirmed(self):
+        backend = InMemoryStateBackend(shared=True)
+        rotator = make_rotator(api_keys=["k1", "k2"], state_backend=backend)
+        from apikeyrotator import AuthenticationError
+
+        with pytest.raises(AuthenticationError):
+            drive(rotator._engine.run("GET", "https://api.example.com/x", {}), [Resp(401), Resp(401)])
+        assert backend.snapshot().invalid == set()   # other instances keep using the keys
+        assert rotator.key_count == 2
+
+    def test_async_rotator_behaves_the_same(self):
+        from apikeyrotator import AuthenticationError
+
+        rotator = AsyncAPIKeyRotator(api_keys=["k1", "k2"], load_env_file=False)
+        engine = rotator._engine
+        engine.status_of = lambda r: r.status_code
+        with pytest.raises(AuthenticationError):
+            drive(engine.run("GET", "https://api.example.com/x", {}), [Resp(403), Resp(403)])
+        assert rotator.key_count == 2
+
+
+class TestNoImplicitFileReads:
+    def test_env_file_is_not_loaded_by_default(self, tmp_path, monkeypatch):
+        from apikeyrotator import NoAPIKeysError
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DOTENV_KEYS", raising=False)
+        (tmp_path / ".env").write_text("DOTENV_KEYS=from-dotenv\n")
+        with pytest.raises(NoAPIKeysError, match="load_env_file=True"):
+            APIKeyRotator(env_var="DOTENV_KEYS")
+        assert "DOTENV_KEYS" not in __import__("os").environ
+
+    def test_env_file_is_loaded_on_request(self, tmp_path, monkeypatch):
+        pytest.importorskip("dotenv")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DOTENV_KEYS", raising=False)
+        (tmp_path / ".env").write_text("DOTENV_KEYS=from-dotenv\n")
+        try:
+            assert APIKeyRotator(env_var="DOTENV_KEYS", load_env_file=True).keys == ["from-dotenv"]
+        finally:
+            __import__("os").environ.pop("DOTENV_KEYS", None)
+
+    def test_config_file_in_cwd_is_ignored_unless_given(self, tmp_path, monkeypatch):
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rotator_config.json").write_text(json.dumps(
+            {"successful_headers": {"x": {"X-Extra": "1"}}}))
+        assert APIKeyRotator(api_keys=["k"], save_sensitive_headers=True).config == {}
+        explicit = APIKeyRotator(api_keys=["k"], save_sensitive_headers=True,
+                                 config_file="rotator_config.json")
+        assert explicit._prepare_headers_and_cookies("k", None, "https://x/")[0]["X-Extra"] == "1"
+
+
+class TestSyncAsyncConsistency:
+    def test_should_retry_callback_gets_the_response_in_async_too(self):
+        seen = []
+        rotator = AsyncAPIKeyRotator(api_keys=["k1"], load_env_file=False, base_delay=0.01,
+                                     should_retry_callback=lambda r: seen.append(r) or False)
+        engine = rotator._engine
+        engine.status_of = lambda r: r.status_code
+        ok = Resp(200)
+        drive(engine.run("GET", "https://api.example.com/x", {}), [ok])
+        assert seen == [ok]
+
+    def test_sync_rotator_warns_about_async_only_middleware(self):
+        class AsyncOnly(RotatorMiddleware):
+            async def before_request(self, request_info):
+                return request_info
+
+        with pytest.warns(UserWarning, match="before_request_sync"):
+            APIKeyRotator(api_keys=["k1"], middlewares=[AsyncOnly()])
+
+    def test_no_warning_for_sync_or_complete_middlewares(self, recwarn):
+        from apikeyrotator import CachingMiddleware, LoggingMiddleware, RateLimitMiddleware
+
+        APIKeyRotator(api_keys=["k1"], middlewares=[
+            CachingMiddleware(), LoggingMiddleware(), RateLimitMiddleware()])
+        assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+
+    @pytest.mark.asyncio
+    async def test_async_rotator_runs_sync_hooks_of_duck_typed_middleware(self):
+        calls = []
+
+        class SyncOnly:  # not a RotatorMiddleware subclass
+            def before_request_sync(self, request_info):
+                calls.append("before")
+                return request_info
+
+        chain = AsyncAPIKeyRotator(api_keys=["k1"], middlewares=[SyncOnly()])._chain
+        from apikeyrotator.middleware import RequestInfo
+
+        info = RequestInfo(method="GET", url="https://x", headers={}, cookies={}, key="k1",
+                           attempt=0, kwargs={})
+        assert await chain.before(info, {}) is None
+        assert calls == ["before"]

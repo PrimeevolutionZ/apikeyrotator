@@ -31,6 +31,26 @@ class AllKeysExhaustedError(APIKeyError):
         self.last_exception = last_exception
 
 
+class AuthenticationError(AllKeysExhaustedError):
+    """
+    Every key was rejected (401/403) and no request has succeeded yet.
+
+    This almost always means the API expects a different auth header, not that
+    all keys are invalid - so the keys are kept (and not reported to a shared
+    state backend). Fix the header with ``auth=`` or ``header_callback=``.
+
+    Attributes:
+        statuses: Rejection status per masked key, e.g. ``{"sk-1****": 401}``.
+        auth_header: The auth header that was sent, with the key masked.
+    """
+
+    def __init__(self, message: str, statuses: dict[str, int] | None = None,
+                 auth_header: str | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.statuses = statuses or {}
+        self.auth_header = auth_header
+
+
 class AllProvidersExhaustedError(APIKeyError):
     """All providers (and their keys) are exhausted"""
     pass

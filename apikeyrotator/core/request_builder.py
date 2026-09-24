@@ -7,7 +7,7 @@ from typing import Any
 
 from apikeyrotator.middleware import RequestInfo
 
-from .util import host_of
+from .util import host_of, mask_key
 
 
 API_KEY_PATTERNS = {
@@ -26,22 +26,53 @@ HeaderCallback = Callable[[str, dict | None], dict | tuple[dict, dict]]
 
 
 def infer_auth_header(key: str) -> tuple[str, str]:
-    """Default auth header for a key: sk-/pk- -> Bearer, 32 chars -> X-API-Key, else 'Key ...'."""
-    for prefix in API_KEY_PATTERNS['bearer']:
-        if key.startswith(prefix):
-            return DEFAULT_AUTH_HEADERS['bearer'], f"Bearer {key}"
-    if len(key) == API_KEY_PATTERNS['api_key']:
+    """Default auth header for a key: 32 characters -> X-API-Key, anything else -> Bearer."""
+    if len(key) == API_KEY_PATTERNS['api_key'] and not key.startswith(API_KEY_PATTERNS['bearer']):
         return DEFAULT_AUTH_HEADERS['api_key'], key
-    return DEFAULT_AUTH_HEADERS['bearer'], f"Key {key}"
+    return DEFAULT_AUTH_HEADERS['bearer'], f"Bearer {key}"
+
+
+AuthSpec = str | tuple[str, str] | bool | None
+
+_AUTH_ALIASES = {
+    "bearer": ("Authorization", "Bearer {key}"),
+    "x-api-key": ("X-API-Key", "{key}"),
+}
+
+
+def resolve_auth(auth: AuthSpec) -> tuple[str, str] | bool | None:
+    """
+    Normalizes the ``auth`` argument.
+
+    None -> infer per key (see infer_auth_header); False -> no auth header;
+    "bearer" / "x-api-key" -> that scheme; (header, template) -> e.g.
+    ("Authorization", "Token {key}") or ("x-goog-api-key", "{key}").
+    """
+    if auth is None or auth is False:
+        return auth
+    if isinstance(auth, str):
+        alias = _AUTH_ALIASES.get(auth.lower())
+        if alias is None:
+            raise ValueError(
+                f"Unknown auth scheme {auth!r}. Use 'bearer', 'x-api-key', "
+                f"a (header, template) tuple such as ('Authorization', 'Token {{key}}'), "
+                f"False (no auth header) or header_callback="
+            )
+        return alias
+    if (isinstance(auth, tuple) and len(auth) == 2 and all(isinstance(x, str) for x in auth)
+            and "{key}" in auth[1]):
+        return auth
+    raise ValueError("auth must be 'bearer', 'x-api-key', (header, template with '{key}'), False or None")
 
 
 class RequestBuilder:
     __slots__ = ('header_callback', 'user_agents', 'proxy_list', 'save_sensitive_headers',
-                 'config', '_ua_index', '_proxy_index', '_lock', '_auth_cache')
+                 'config', '_ua_index', '_proxy_index', '_lock', '_auth_cache', '_auth', '_auth_spec')
 
     def __init__(self, header_callback: HeaderCallback | None = None,
                  user_agents: list[str] | None = None, proxy_list: list[str] | None = None,
-                 save_sensitive_headers: bool = False, config: dict | None = None):
+                 save_sensitive_headers: bool = False, config: dict | None = None,
+                 auth: AuthSpec = None):
         self.header_callback = header_callback
         self.user_agents = user_agents or []
         self.proxy_list = proxy_list or []
@@ -50,8 +81,42 @@ class RequestBuilder:
         self._ua_index = 0
         self._proxy_index = 0
         self._lock = threading.Lock()
-        # key -> inferred auth header; bounded (reset when full) because keys can be rotated
+        # key -> auth header; bounded (reset when full) because keys can be rotated
         self._auth_cache: dict[str, tuple[str, str]] = {}
+        self.auth = auth
+
+    @property
+    def auth(self) -> AuthSpec:
+        return self._auth_spec
+
+    @auth.setter
+    def auth(self, auth: AuthSpec) -> None:
+        self._auth = resolve_auth(auth)
+        self._auth_spec = auth
+        self._auth_cache = {}
+
+    def masked_auth_header(self, key: str) -> str | None:
+        """The auth header for `key` as text, with the key masked (for error messages)."""
+        mode = self._auth
+        if mode is False:
+            return None
+        if mode is None:
+            name, value = infer_auth_header(key)
+            return f"{name}: {value[:len(value) - len(key)]}{mask_key(key)}"
+        return f"{mode[0]}: {mode[1].format(key=mask_key(key))}"
+
+    def auth_header(self, key: str) -> tuple[str, str] | None:
+        """The auth header sent with `key` (None when auth=False)."""
+        mode = self._auth
+        if mode is False:
+            return None
+        header = self._auth_cache.get(key)
+        if header is None:
+            if len(self._auth_cache) >= _AUTH_CACHE_SIZE:
+                self._auth_cache = {}
+            header = infer_auth_header(key) if mode is None else (mode[0], mode[1].format(key=key))
+            self._auth_cache[key] = header
+        return header
 
     def next_user_agent(self) -> str | None:
         agents = self.user_agents
@@ -84,24 +149,25 @@ class RequestBuilder:
                     (k, v) for k, v in saved.items() if k.lower() not in ("authorization", "x-api-key")
                 )
 
+        key_in_callback = False
         if self.header_callback:
             result = self.header_callback(key, custom_headers)
             if isinstance(result, tuple) and len(result) == 2:
-                headers.update(result[0])
+                callback_headers = result[0]
                 cookies.update(result[1])
             elif isinstance(result, dict):
-                headers.update(result)
+                callback_headers = result
+            else:
+                callback_headers = {}
+            headers.update(callback_headers)
+            # The callback already sends the key (in any header) - don't send it twice
+            key_in_callback = any(isinstance(v, str) and key in v for v in callback_headers.values())
 
         present = {h.lower() for h in headers} if headers else ()
-        # Add the inferred auth header only if the request/callback set no auth header
-        # itself - otherwise the key would be sent twice (e.g. X-API-Key + Authorization).
-        if "authorization" not in present and "x-api-key" not in present:
-            auth = self._auth_cache.get(key)
-            if auth is None:
-                if len(self._auth_cache) >= _AUTH_CACHE_SIZE:
-                    self._auth_cache = {}
-                auth = self._auth_cache[key] = infer_auth_header(key)
-            headers[auth[0]] = auth[1]
+        if not key_in_callback and "authorization" not in present and "x-api-key" not in present:
+            auth = self.auth_header(key)
+            if auth is not None and auth[0].lower() not in present:
+                headers[auth[0]] = auth[1]
 
         if self.user_agents and "user-agent" not in present:
             user_agent = self.next_user_agent()

@@ -114,7 +114,7 @@ class BaseKeyRotator:
     - limits (RateLimiter, BreakerRegistry): ``key_rate_limit``,
       ``respect_rate_limit_headers``, ``circuit_breaker``
     - shared state (StateSync): ``state_backend``, ``state_sync_interval``
-    - request building (RequestBuilder): ``header_callback``, ``user_agents``,
+    - request building (RequestBuilder): ``auth``, ``header_callback``, ``user_agents``,
       ``proxy_list``, ``config_file``, ``config_loader``, ``save_sensitive_headers``
     - observability & extensions: ``middlewares``, ``enable_metrics``,
       ``error_classifier``, ``logger``
@@ -134,6 +134,7 @@ class BaseKeyRotator:
     should_retry_callback = _Delegate('_policy')
     random_delay_range = _Delegate('_policy')
     header_callback = _Delegate('_builder')
+    auth = _Delegate('_builder')
     user_agents = _Delegate('_builder')
     proxy_list = _Delegate('_builder')
     save_sensitive_headers = _Delegate('_builder')
@@ -160,8 +161,8 @@ class BaseKeyRotator:
             random_delay_range: tuple[float, float] | None = None,
             proxy_list: list[str] | None = None,
             logger: logging.Logger | None = None,
-            config_file: str = "rotator_config.json",
-            load_env_file: bool = True,
+            config_file: str | None = None,
+            load_env_file: bool = False,
             error_classifier: ErrorClassifier | None = None,
             config_loader: ConfigLoader | None = None,
             rotation_strategy: str | RotationStrategy | BaseRotationStrategy = "round_robin",
@@ -181,16 +182,19 @@ class BaseKeyRotator:
             state_backend: StateBackend | None = None,
             state_sync_interval: float = 1.0,
             auto_refresh_interval: float | None = None,
+            auth: str | tuple[str, str] | bool | None = None,
     ):
         self._logger = logger if logger else logging.getLogger(__name__)
 
         if load_env_file:
             try:
-                from dotenv import load_dotenv
+                from dotenv import find_dotenv, load_dotenv
             except ImportError:
-                pass
+                self._logger.warning("load_env_file=True but python-dotenv is not installed")
             else:
-                load_dotenv()
+                # Search from the working directory: plain load_dotenv() searches from this
+                # file's location, which never finds the application's .env once installed
+                load_dotenv(find_dotenv(usecwd=True))
 
         self._policy = RetryPolicy(
             max_retries=max_retries, base_delay=base_delay, max_delay=max_delay,
@@ -237,10 +241,15 @@ class BaseKeyRotator:
 
         # --- request building ---
         self.config_file = config_file
-        self.config_loader = config_loader or ConfigLoader(config_file=config_file, logger=self._logger)
+        # A config file is read only when one is given (nothing is read from the CWD implicitly)
+        if config_loader is None and config_file:
+            config_loader = ConfigLoader(config_file=config_file, logger=self._logger)
+        self.config_loader = config_loader
         self._builder = RequestBuilder(
             header_callback=header_callback, user_agents=user_agents, proxy_list=proxy_list,
-            save_sensitive_headers=save_sensitive_headers, config=self.config_loader.load_config(),
+            save_sensitive_headers=save_sensitive_headers,
+            config=config_loader.load_config() if config_loader is not None else {},
+            auth=auth,
         )
 
         self._chain = MiddlewareChain(middlewares, self._logger)
@@ -265,15 +274,15 @@ class BaseKeyRotator:
 
     def _log_initialization_summary(self) -> None:
         if self._keys_pending:
-            self.logger.info("✅ Rotator initialized; keys will be loaded from the secret provider on first use")
+            self.logger.info("Rotator initialized; keys will be loaded from the secret provider on first use")
         else:
             self.logger.info(
-                f"✅ Rotator initialized with {self.key_count} keys. "
+                f"Rotator initialized with {self.key_count} keys. "
                 f"Max retries: {self.max_retries}, Base delay: {self.base_delay}s, "
                 f"Strategy: {type(self.rotation_strategy).__name__}"
             )
         if self.middlewares:
-            self.logger.info(f"✅ Middlewares loaded: {len(self.middlewares)}")
+            self.logger.info(f"Middlewares loaded: {len(self.middlewares)}")
 
     @property
     def logger(self) -> logging.Logger:
@@ -354,7 +363,7 @@ class BaseKeyRotator:
             return self.keys
         if new_keys != self.keys:
             self.keys = new_keys
-            self.logger.info(f"🔄 Keys refreshed from provider: {self.key_count} keys active")
+            self.logger.info(f"Keys refreshed from provider: {self.key_count} keys active")
         return self.keys
 
     def refresh_keys_from_provider_sync(self) -> list[str]:
@@ -461,11 +470,12 @@ class APIKeyRotator(BaseKeyRotator):
         )
         self._engine.status_of = self._transport.status
         self.http_backend = self._transport.name
+        self._chain.warn_async_only()
         self._refresh_stop: threading.Event | None = None
         self._refresh_thread: threading.Thread | None = None
         if self.auto_refresh_interval is not None:
             self.start_auto_refresh(self.auto_refresh_interval)
-        self.logger.info(f"✅ Sync rotator initialized ({self.http_backend} backend, connection pooling)")
+        self.logger.info(f"Sync rotator initialized ({self.http_backend} backend, connection pooling)")
 
     @property
     def session(self) -> Any:
@@ -618,7 +628,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
         self.http_backend = self._transport.name
         self._refresh_task: asyncio.Task | None = None
         self._keys_lock = asyncio.Lock()
-        self.logger.info(f"✅ Async rotator initialized ({self.http_backend} backend)")
+        self.logger.info(f"Async rotator initialized ({self.http_backend} backend)")
 
     def _defer_provider_keys(self) -> bool:
         return in_running_loop()

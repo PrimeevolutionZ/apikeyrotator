@@ -3,6 +3,7 @@ from .exceptions import (
     AllKeysExhaustedError,
     AllProvidersExhaustedError,
     APIKeyError,
+    AuthenticationError,
     CircuitOpenError,
     DeadlineExceededError,
     HTTPStatusError,
@@ -22,6 +23,7 @@ __all__ = [
     "HTTPStatusError",
     "DeadlineExceededError",
     "CircuitOpenError",
+    "AuthenticationError",
     "parse_keys",
     "ConfigLoader",
 ]

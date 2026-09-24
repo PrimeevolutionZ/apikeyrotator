@@ -45,8 +45,10 @@ Subclass `RotatorMiddleware` and implement any of these hooks:
 
 `APIKeyRotator` calls the `*_sync` hooks, `AsyncAPIKeyRotator` calls the
 coroutine hooks. The base class's coroutine hooks delegate to the sync ones, so
-**implementing `*_sync` makes a middleware work with both rotators**. Override the
-`async` versions only when they need to `await` something.
+**implementing `*_sync` makes a middleware work with both rotators** (this also holds
+for classes that don't inherit from `RotatorMiddleware`). Override the `async`
+versions only when they need to `await` something. A middleware with only async hooks
+never runs in `APIKeyRotator` - the rotator emits a `UserWarning` when it is created.
 
 ### Order
 
@@ -152,11 +154,11 @@ rotator = APIKeyRotator(
 )
 rotator.get("https://api.example.com/data")
 
-# 📤 GET https://api.example.com/data (key: key1****, attempt: 1)
-# 📥 ✅ 200 from https://api.example.com/data (key: key1****) (0.234s)
+# GET https://api.example.com/data (key: key1****, attempt: 1)
+# 200 from https://api.example.com/data (key: key1****) (0.234s)
 ```
 
-Log levels: `2xx` INFO ✅, `4xx` WARNING ⚠️, `5xx` ERROR ❌; errors are logged at
+Log levels: `2xx` INFO, `4xx` WARNING, `5xx` ERROR; errors are logged at
 ERROR with a traceback at DEBUG level. Headers `Authorization`, `X-API-Key`,
 `Cookie`, `Set-Cookie` are logged as `[REDACTED]` (headers are logged at DEBUG).
 

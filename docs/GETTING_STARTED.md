@@ -37,17 +37,18 @@ rotator.close()             # or use: with APIKeyRotator(...) as rotator:
 
 ### Keys from the environment
 
-Create a `.env` file (or export the variable):
+Export the variable (or put it in a `.env` file):
 
 ```bash
-API_KEYS=key1,key2,key3
+export API_KEYS=key1,key2,key3
 ```
 
 ```python
 from apikeyrotator import APIKeyRotator
 
-rotator = APIKeyRotator()                        # reads API_KEYS (and .env)
+rotator = APIKeyRotator()                        # reads API_KEYS
 rotator = APIKeyRotator(env_var="OPENAI_KEYS")   # another variable
+rotator = APIKeyRotator(load_env_file=True)      # load ./.env into the environment first
 ```
 
 ### Asynchronous
@@ -124,24 +125,21 @@ processed them (500/502/504, read timeouts); send an `Idempotency-Key` header or
 
 ### 3. Authorization header
 
-If the request has no `Authorization` header, the rotator adds one based on the key:
-
-| Key | Header |
-|---|---|
-| starts with `sk-` or `pk-` | `Authorization: Bearer <key>` |
-| exactly 32 characters | `X-API-Key: <key>` |
-| anything else | `Authorization: Key <key>` |
-
-For any other scheme use `header_callback`:
+Tell the rotator how your API expects the key with `auth=`:
 
 ```python
 from apikeyrotator import APIKeyRotator
 
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    header_callback=lambda key, headers: {"Authorization": f"Token {key}"},
-)
+APIKeyRotator(api_keys=["key1"], auth="bearer")                          # Authorization: Bearer key1
+APIKeyRotator(api_keys=["key1"], auth="x-api-key")                       # X-API-Key: key1
+APIKeyRotator(api_keys=["key1"], auth=("Authorization", "Token {key}"))  # any header / scheme
+APIKeyRotator(api_keys=["key1"], auth=("x-goog-api-key", "{key}"))
 ```
+
+Without `auth=`, 32-character keys are sent as `X-API-Key` and everything else as
+`Authorization: Bearer <key>`. If you get the header wrong, you get an
+`AuthenticationError` that shows the header that was sent - your keys are not
+thrown away. For headers that need more than the key, use `header_callback`.
 
 The callback's headers are added to every request. The default header is added
 only when neither `Authorization` nor `X-API-Key` is set by the request or the callback.

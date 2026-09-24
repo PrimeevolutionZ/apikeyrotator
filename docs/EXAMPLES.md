@@ -113,8 +113,8 @@ rotator = APIKeyRotator(
 )
 rotator.get("https://api.example.com/data")
 
-# 📤 GET https://api.example.com/data (key: key1****, attempt: 1)
-# 📥 ✅ 200 from https://api.example.com/data (key: key1****) (0.234s)
+# GET https://api.example.com/data (key: key1****, attempt: 1)
+# 200 from https://api.example.com/data (key: key1****) (0.234s)
 ```
 
 ### Rate Limit Middleware
@@ -199,7 +199,7 @@ for key, stats in rotator.get_key_statistics().items():
     print(f"{key[:4]}****: {stats['total_requests']} requests, "
           f"{stats['success_rate']:.2%} success, "
           f"{stats['avg_response_time']:.3f}s avg, "
-          f"{'✅' if stats['is_healthy'] else '❌'}")
+          f"{'healthy' if stats['is_healthy'] else 'unhealthy'}")
 ```
 
 ### Per-Endpoint Metrics
@@ -260,7 +260,7 @@ def display():
     print("Keys:")
     for key, s in rotator.get_key_statistics().items():
         parked = s["rate_limit_reset"] > time.time()
-        print(f"  {'✅' if s['is_healthy'] else '❌'} {key[:4]}****  "
+        print(f"  {'healthy  ' if s['is_healthy'] else 'unhealthy'} {key[:4]}****  "
               f"{s['successful_requests']}/{s['total_requests']}  {'(rate limited)' if parked else ''}")
     print("Top endpoints:")
     for endpoint, count in rotator.metrics.get_top_endpoints(5):
@@ -434,9 +434,9 @@ def collect_analytics_data(start_date: str, end_date: str) -> dict:
             )
             response.raise_for_status()
             results[endpoint] = response.json()
-            print(f"✓ {endpoint}")
+            print(f"OK {endpoint}")
         except AllKeysExhaustedError as e:
-            print(f"✗ {endpoint}: {e}")
+            print(f"FAILED {endpoint}: {e}")
     return results
 
 data = collect_analytics_data("2026-01-01", "2026-01-31")

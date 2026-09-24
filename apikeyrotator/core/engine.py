@@ -49,6 +49,7 @@ from apikeyrotator.utils import CircuitBreaker, ErrorClassifier, ErrorType, pars
 from .breakers import BreakerRegistry
 from .exceptions import (
     AllKeysExhaustedError,
+    AuthenticationError,
     CircuitOpenError,
     DeadlineExceededError,
     HTTPStatusError,
@@ -83,14 +84,15 @@ class Action(Enum):
     """What the request loop does after a response was classified."""
     RETURN = "return"  # hand the response to the caller
     RETRY = "retry"  # retry (consumes one attempt)
-    SWITCH = "switch"  # key was removed, retry with another key (no attempt consumed)
+    SWITCH = "switch"  # key was rejected, retry with another key (no attempt consumed)
+    AUTH_FAILED = "auth_failed"  # every key rejected before any success - raise AuthenticationError
 
 
 class RequestContext:
     """Per-request state of the retry loop."""
     __slots__ = (
         'method', 'url', 'endpoint', 'idempotent', 'deadline', 'attempt',
-        'last_response', 'last_exception', 'reports', 'breaker', 'breaker_pending',
+        'last_response', 'last_exception', 'reports', 'breaker', 'breaker_pending', 'rejected',
     )
 
     def __init__(self, method: str, url: str, idempotent: bool, deadline: float | None,
@@ -109,6 +111,8 @@ class RequestContext:
         # True between allow_request() and a verdict (success/failure): if the attempt
         # dies in between, the HALF_OPEN probe slot must be released.
         self.breaker_pending = False
+        # Keys rejected with 401/403 in this request while auth is not confirmed yet
+        self.rejected: dict[str, int] | None = None  # key -> status, in attempt order
 
     def breaker_verdict(self, success: bool) -> None:
         breaker = self.breaker
@@ -197,7 +201,7 @@ class RequestEngine:
                 self._check_budget(ctx)
                 self._check_breaker(ctx)
 
-                key = pool.select()
+                key = self._select(ctx)
                 if limiter.key_rate_limit is not None:
                     while True:
                         wait = (yield (CALL, limiter.bucket_wait, (key,))) if offload \
@@ -207,7 +211,7 @@ class RequestEngine:
                         yield from self._sleep(ctx, limiter.after_bucket_denied(key, wait))
                         if pool.count() == 0:
                             raise AllKeysExhaustedError("All keys are invalid (empty list)")
-                        key = pool.select()
+                        key = self._select(ctx)
                 if self.logger.isEnabledFor(logging.DEBUG):
                     self.logger.debug("Selected key: %s", mask_key(key))
 
@@ -281,6 +285,8 @@ class RequestEngine:
                 ctx.last_response = response
                 ctx.last_exception = None
 
+                if action is Action.AUTH_FAILED:
+                    raise self._auth_error(ctx)
                 if action is Action.RETRY:
                     ctx.attempt += 1
                 if ctx.reports:
@@ -396,7 +402,7 @@ class RequestEngine:
         if self.sync:
             classifier_response = callback_arg = response
         else:
-            classifier_response, callback_arg = StatusView(status_code, headers), status_code
+            classifier_response, callback_arg = StatusView(status_code, headers), response
         endpoint = ctx.endpoint
         policy = self.policy
         classifier = self.classifier
@@ -408,15 +414,29 @@ class RequestEngine:
         if error_type == ErrorType.PERMANENT:
             if classifier.should_remove_key(classifier_response):
                 self._record(key, endpoint, False, request_time)
-                self.logger.error(
-                    f"❌ Key {mask_key(key)} permanently invalid (Status: {status_code}). Removing it from rotation.")
-                self.state.report_invalid(ctx.reports, key)
-                self.pool.remove(key)
+                pool = self.pool
+                if not pool.auth_confirmed:
+                    # Nothing has succeeded yet: the auth header format may be wrong for
+                    # every key. Keep the key for now and try the others.
+                    pool.add_suspect(key, status_code)
+                    rejected = ctx.rejected
+                    if rejected is None:
+                        rejected = ctx.rejected = {}
+                    rejected[key] = status_code
+                    if len(rejected) >= pool.count():
+                        return Action.AUTH_FAILED, error_type
+                    self.logger.warning(
+                        f"Key {mask_key(key)} rejected (status {status_code}) before any request "
+                        f"succeeded; trying another key")
+                    return Action.SWITCH, error_type
+                self._remove_invalid(ctx, key, status_code)
                 return Action.SWITCH, error_type
             # Client error (400/404/422...) - the request is wrong, not the key.
             # Retrying or removing the key would not help: hand the response back.
             self._record(key, endpoint, False, request_time, key_success=True)
-            self.logger.warning(f"⚠️ Client error (Status: {status_code}), not retrying")
+            if not self.pool.auth_confirmed:
+                self._confirm_auth(ctx)
+            self.logger.warning(f"Client error (status {status_code}), not retrying")
             return Action.RETURN, error_type
 
         if error_type in (ErrorType.RATE_LIMIT, ErrorType.TEMPORARY):
@@ -428,12 +448,12 @@ class RequestEngine:
                 # The server may already have processed this POST/PATCH - retrying could
                 # duplicate the operation. Hand the response to the caller instead.
                 self.logger.warning(
-                    f"⚠️ {ctx.method} got {status_code}; not retrying a non-idempotent request "
+                    f"{ctx.method} got {status_code}; not retrying a non-idempotent request "
                     f"(pass retry_non_idempotent=True or an Idempotency-Key header to allow it)")
                 return Action.RETURN, error_type
             msg = "Rate limited" if is_rate_limited else "Temporary error"
             self.logger.warning(
-                f"↻ {msg} (Status: {status_code}, key: {mask_key(key)}). "
+                f"{msg} (Status: {status_code}, key: {mask_key(key)}). "
                 f"Attempt {ctx.attempt + 1}/{policy.max_retries}")
             return Action.RETRY, error_type
 
@@ -441,15 +461,61 @@ class RequestEngine:
         if callback and callback(callback_arg):
             self._record(key, endpoint, False, request_time)
             self.logger.warning(
-                f"↻ Retry requested by should_retry_callback (Status: {status_code}). "
+                f"Retry requested by should_retry_callback (Status: {status_code}). "
                 f"Attempt {ctx.attempt + 1}/{policy.max_retries}")
             return Action.RETRY, None
 
         self._record(key, endpoint, True, request_time)
+        if not self.pool.auth_confirmed:
+            self._confirm_auth(ctx)
         self.limiter.on_success(ctx.reports, key, headers)
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("✅ Success (Status: %s)", status_code)
+            self.logger.debug("Success (Status: %s)", status_code)
         return Action.RETURN, None
+
+    def _select(self, ctx: RequestContext) -> str:
+        key = self.pool.select()
+        rejected = ctx.rejected
+        if rejected and key in rejected:
+            key = self.pool.first_other(rejected) or key
+        return key
+
+    def _remove_invalid(self, ctx: RequestContext, key: str, status_code: int) -> None:
+        self.logger.error(
+            f"Key {mask_key(key)} permanently invalid (status {status_code}); removing it from rotation")
+        self.state.report_invalid(ctx.reports, key)
+        self.pool.remove(key)
+
+    def _confirm_auth(self, ctx: RequestContext) -> None:
+        """The API accepted a request: keys rejected earlier are really invalid."""
+        for key, status in self.pool.confirm_auth().items():
+            self._remove_invalid(ctx, key, status)
+
+    def _auth_error(self, ctx: RequestContext) -> AuthenticationError:
+        rejected = ctx.rejected or {}
+        statuses = {mask_key(k): status for k, status in rejected.items()}
+        builder = self.builder
+        sample = next(iter(rejected), None)
+        header = builder.masked_auth_header(sample) if sample is not None else None
+        if builder.header_callback is not None:
+            sent = "the headers returned by header_callback"
+        elif header is None:
+            sent = "no auth header (auth=False)"
+        else:
+            sent = f"'{header}'"
+        codes = ", ".join(sorted({str(s) for s in statuses.values()}))
+        message = (
+            f"All {len(rejected)} key(s) were rejected ({codes}) and no request has succeeded yet. "
+            f"This usually means the API expects a different auth header, so the keys were kept. "
+            f"Sent: {sent}. Set auth='bearer', auth='x-api-key', "
+            f"auth=('Header-Name', 'Scheme {{key}}') or header_callback=."
+        )
+        self.logger.error(message)
+        return AuthenticationError(
+            message, statuses=statuses,
+            auth_header=header if builder.header_callback is None else None,
+            last_response=ctx.last_response, last_exception=ctx.last_exception,
+        )
 
     def _record_network_error(self, ctx: RequestContext, key: str, error: BaseException,
                               request_time: float, safe_to_retry: bool) -> bool:
@@ -459,12 +525,12 @@ class RequestEngine:
         ctx.breaker_verdict(False)
         if not ctx.idempotent and not safe_to_retry:
             self.logger.warning(
-                f"⚠️ {ctx.method} failed with {type(error).__name__} after the request may have "
+                f"{ctx.method} failed with {type(error).__name__} after the request may have "
                 f"been sent; not retrying a non-idempotent request")
             return False
         ctx.attempt += 1
         self.logger.warning(
-            f"⚠️ Network error: {type(error).__name__}: {error}. Attempt {ctx.attempt}/{self.policy.max_retries}")
+            f"Network error: {type(error).__name__}: {error}. Attempt {ctx.attempt}/{self.policy.max_retries}")
         return True
 
     def _retry_delay(self, attempt: int, error_type: ErrorType | None, headers: Any) -> float:
@@ -488,7 +554,7 @@ class RequestEngine:
 
     def exhausted_error(self, last_response: Any, last_exception: BaseException | None) -> AllKeysExhaustedError:
         max_retries = self.policy.max_retries
-        self.logger.error(f"❌ All {max_retries} retries exhausted")
+        self.logger.error(f"All {max_retries} retries exhausted")
         details = ""
         if last_exception is not None:
             details = f" Last error: {type(last_exception).__name__}: {last_exception}"

@@ -60,7 +60,7 @@ class LoggingMiddleware(RotatorMiddleware):
                 allowed = True
 
         if dropped > 0:
-            self.logger.warning(f"⚠️ Dropped {dropped} log messages due to rate limiting")
+            self.logger.warning(f"Dropped {dropped} log messages due to rate limiting")
         return allowed
 
     def _mask_key(self, key: str) -> str:
@@ -88,14 +88,14 @@ class LoggingMiddleware(RotatorMiddleware):
             masked_key = self._mask_key(request_info.key)
             headers_str = self._format_headers(request_info.headers)
             self.logger.info(
-                f"📤 {request_info.method} {request_info.url} "
+                f"{request_info.method} {request_info.url} "
                 f"(key: {masked_key}, attempt: {request_info.attempt + 1})"
             )
             self.logger.debug(f"Headers: {headers_str}")
             if request_info.kwargs.get('json'):
                 self.logger.debug(f"JSON body: {request_info.kwargs['json']}")
         else:
-            self.logger.info(f"📤 {request_info.method} {request_info.url}")
+            self.logger.info(f"{request_info.method} {request_info.url}")
 
     def _log_response(self, response_info: ResponseInfo):
         if not self._should_log():
@@ -106,13 +106,13 @@ class LoggingMiddleware(RotatorMiddleware):
 
         if 200 <= status < 300:
             log_level = logging.INFO
-            emoji = "📥 ✅"
+            emoji = ""
         elif 400 <= status < 500:
             log_level = logging.WARNING
-            emoji = "📥 ⚠️"
+            emoji = ""
         else:
             log_level = logging.ERROR
-            emoji = "📥 ❌"
+            emoji = ""
 
         message = f"{emoji} {status} from {url}"
 
@@ -140,7 +140,7 @@ class LoggingMiddleware(RotatorMiddleware):
         masked_key = self._mask_key(error_info.request_info.key)
 
         self.logger.error(
-            f"❌ Error for {url}: {type(exception).__name__}: {str(exception)}"
+            f"Error for {url}: {type(exception).__name__}: {str(exception)}"
         )
 
         if self.verbose:

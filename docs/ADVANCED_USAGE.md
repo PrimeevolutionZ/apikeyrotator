@@ -26,7 +26,7 @@ Middleware intercepts every attempt: before the request, after the response and
 on errors. Use it to cache responses, log traffic, track rate limits or modify
 headers.
 
-**[📖 Complete Middleware Guide →](MIDDLEWARE.md)**
+**[Complete Middleware Guide →](MIDDLEWARE.md)**
 
 ### Quick Example
 
@@ -84,8 +84,8 @@ rotator = APIKeyRotator(
     middlewares=[LoggingMiddleware(verbose=True, log_response_time=True, max_key_chars=4)],
 )
 
-# 📤 GET https://api.example.com/data (key: key1****, attempt: 1)
-# 📥 ✅ 200 from https://api.example.com/data (key: key1****) (0.234s)
+# GET https://api.example.com/data (key: key1****, attempt: 1)
+# 200 from https://api.example.com/data (key: key1****) (0.234s)
 ```
 
 Sensitive headers (`Authorization`, `X-API-Key`, `Cookie`) are redacted.
@@ -469,8 +469,8 @@ rotator = APIKeyRotator(api_keys=["key1"], http_client_kwargs={"verify": "/etc/s
 
 ## Configuration File
 
-The rotator reads `config_file` (default `rotator_config.json`, JSON or YAML) at
-start-up; it never writes it. The only setting it uses is `successful_headers` -
+The rotator reads `config_file` (JSON or YAML, only when given) at start-up; it never
+writes it. The only setting it uses is `successful_headers` -
 extra headers per domain - and only when `save_sensitive_headers=True`:
 
 ```json

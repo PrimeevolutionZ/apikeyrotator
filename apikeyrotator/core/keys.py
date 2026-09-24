@@ -49,7 +49,7 @@ class KeyPool:
     """
 
     __slots__ = ('_lock', '_keys', '_key_metrics', '_strategy', '_spec', '_spec_kwargs',
-                 '_recovery_timeout', 'logger')
+                 '_recovery_timeout', 'logger', 'auth_confirmed', '_suspects')
 
     def __init__(self, keys: list[str], strategy: StrategySpec, strategy_kwargs: dict | None,
                  logger: logging.Logger, recovery_timeout: float | None = None):
@@ -61,6 +61,10 @@ class KeyPool:
         self._recovery_timeout = recovery_timeout
         self._strategy: BaseRotationStrategy | None = None
         self.logger = logger
+        #: True once any request was accepted by the API. Until then a 401/403 may mean
+        #: "wrong auth header" rather than "bad key", so rejected keys are only remembered.
+        self.auth_confirmed = False
+        self._suspects: dict[str, int] = {}
         if self._keys or isinstance(strategy, BaseRotationStrategy):
             self._init_strategy()
 
@@ -104,6 +108,13 @@ class KeyPool:
         except ValueError as e:
             raise AllKeysExhaustedError(f"No valid keys available: {e}") from e
 
+    def first_other(self, excluded: set[str] | dict[str, int]) -> str | None:
+        """First key (in pool order) that is not in `excluded`."""
+        for key in self._key_metrics:
+            if key not in excluded:
+                return key
+        return None
+
     def remove(self, key: str) -> bool:
         with self._lock:
             if key not in self._key_metrics:
@@ -123,11 +134,27 @@ class KeyPool:
             self._keys = list(new_keys)
             self._key_metrics = {key: old.get(key) or KeyMetrics(key) for key in self._keys}
             keys = self._keys.copy()
+            self._suspects = {k: v for k, v in self._suspects.items() if k in self._key_metrics}
         if self._strategy is None:
             if keys:
                 self._init_strategy()
         else:
             self._strategy.update_keys(keys)
+
+    # --- auth confirmation ---
+
+    def add_suspect(self, key: str, status: int) -> None:
+        """Remembers a key rejected (401/403) before auth was confirmed."""
+        self._suspects[key] = status
+
+    def suspects(self) -> dict[str, int]:
+        return dict(self._suspects)
+
+    def confirm_auth(self) -> dict[str, int]:
+        """Marks auth as working; returns the suspects, which are now known to be invalid."""
+        self.auth_confirmed = True
+        suspects, self._suspects = self._suspects, {}
+        return {k: v for k, v in suspects.items() if k in self._key_metrics}
 
     # --- metrics ---
 

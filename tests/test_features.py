@@ -43,7 +43,7 @@ def make(keys=('k1', 'k2'), **kwargs):
 
 
 def used_keys(mock_request):
-    return [c[1]['headers']['Authorization'].replace('Key ', '') for c in mock_request.call_args_list]
+    return [c[1]['headers']['Authorization'].replace('Bearer ', '') for c in mock_request.call_args_list]
 
 
 def connect_refused():
@@ -568,7 +568,7 @@ class TestHttpxBackend:
         response = rotator.get('https://api.test/x', params={'q': 1})
         assert isinstance(response, httpx.Response)
         assert response.status_code == 200 and response.json() == {"status": 200}
-        assert [r.headers['Authorization'] for r in seen] == ['Key k1', 'Key k2']
+        assert [r.headers['Authorization'] for r in seen] == ['Bearer k1', 'Bearer k2']
         assert seen[0].url.params['q'] == '1'
         rotator.close()
 

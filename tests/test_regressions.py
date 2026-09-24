@@ -41,7 +41,7 @@ def make_rotator(keys=('k1', 'k2'), **kwargs):
 
 
 def used_keys(mock_request):
-    return [c[1]['headers']['Authorization'].replace('Key ', '') for c in mock_request.call_args_list]
+    return [c[1]['headers']['Authorization'].replace('Bearer ', '') for c in mock_request.call_args_list]
 
 
 # ============================================================================
@@ -76,13 +76,37 @@ class TestClientErrors:
             assert rotator.get('http://example.com').status_code == 200
         assert rotator.keys == ['good']
 
-    def test_all_keys_invalid_raises(self):
+    def test_all_keys_rejected_before_any_success_keeps_keys(self):
+        """Every key 401/403 on the first request = wrong auth header, not bad keys."""
+        from apikeyrotator import AuthenticationError
+
         rotator = make_rotator(['a', 'b'])
         with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = resp(403)
+            with pytest.raises(AuthenticationError) as exc:
+                rotator.get('http://example.com')
+            assert mock_request.call_count == 2  # each key tried once
+        assert rotator.keys == ['a', 'b']
+        assert isinstance(exc.value, AllKeysExhaustedError)
+        assert "Authorization: Bearer a****" in str(exc.value)
+        assert exc.value.statuses == {'a****': 403, 'b****': 403}
+
+    def test_all_keys_invalid_after_auth_confirmed_are_removed(self):
+        rotator = make_rotator(['a', 'b'])
+        with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = resp(200)
+            rotator.get('http://example.com')          # auth format confirmed
             mock_request.return_value = resp(403)
             with pytest.raises(AllKeysExhaustedError):
                 rotator.get('http://example.com')
         assert rotator.keys == []
+
+    def test_keys_rejected_before_first_success_are_removed_once_it_succeeds(self):
+        rotator = make_rotator(['bad1', 'bad2', 'good'])
+        with patch('requests.Session.request') as mock_request:
+            mock_request.side_effect = [resp(401), resp(401), resp(200)]
+            assert rotator.get('http://example.com').status_code == 200
+        assert rotator.keys == ['good']
 
     def test_should_remove_key_with_real_falsy_response(self):
         """requests.Response is falsy for error codes - classifier must not rely on truthiness."""

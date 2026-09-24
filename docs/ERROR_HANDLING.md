@@ -22,7 +22,7 @@ Every response or exception is classified by `ErrorClassifier` into an `ErrorTyp
 |---|---|---|
 | `RATE_LIMIT` | `429` | Park the key until `Retry-After` / `X-RateLimit-Reset`, retry **immediately** with another key; wait only if all keys are parked |
 | `TEMPORARY` | `5xx`, `408`, `409`, `425`, `511` | Retry with exponential backoff (`Retry-After` honoured) |
-| `PERMANENT` | `401`, `403` | Remove the key from rotation, retry with another key |
+| `PERMANENT` | `401`, `403` | Remove the key from rotation, retry with another key (before the first accepted request: keep it, try the others, raise `AuthenticationError` if all are rejected) |
 | `PERMANENT` | other `4xx` (`400`, `404`, `422`...) | Return the response - the request itself is wrong, retrying won't help |
 | `NETWORK` | connection errors, timeouts | Retry with backoff |
 | `UNKNOWN` | `2xx`/`3xx` | Return the response |
@@ -59,7 +59,8 @@ APIKeyError
 ├── NoAPIKeysError
 ├── AllKeysExhaustedError          .last_response  .last_exception
 │   ├── DeadlineExceededError      (also TimeoutError)
-│   └── CircuitOpenError           .host  .retry_after
+│   ├── CircuitOpenError           .host  .retry_after
+│   └── AuthenticationError        .statuses  .auth_header
 ├── AllProvidersExhaustedError
 └── HTTPStatusError                .status_code
 ```
@@ -67,13 +68,13 @@ APIKeyError
 ### NoAPIKeysError
 
 No keys were given and none were found (`api_keys`, `secret_provider`, the
-`API_KEYS` environment variable / `.env`).
+`API_KEYS` environment variable; `.env` only with `load_env_file=True`).
 
 ```python
 from apikeyrotator import APIKeyRotator, NoAPIKeysError
 
 try:
-    rotator = APIKeyRotator(load_env_file=False)
+    rotator = APIKeyRotator()
 except NoAPIKeysError as e:
     print(f"No API keys available: {e}")
 ```
@@ -134,6 +135,27 @@ except CircuitOpenError as e:
     print(f"{e.host} is down; next probe in {e.retry_after:.0f}s")
 ```
 
+### AuthenticationError
+
+Every key was rejected with `401`/`403` and no request has succeeded yet. That is
+almost always a wrong auth header, so the rotator keeps the keys (and doesn't mark
+them invalid in shared state) and tells you what it sent:
+
+```python
+from apikeyrotator import APIKeyRotator, AuthenticationError
+
+rotator = APIKeyRotator(api_keys=["key1", "key2"])
+
+try:
+    rotator.get("https://api.example.com/data")
+except AuthenticationError as e:
+    print(e.auth_header)   # 'Authorization: Bearer key1****'
+    print(e.statuses)      # {'key1****': 401, 'key2****': 401}
+    # fix: APIKeyRotator(..., auth="x-api-key") or auth=("Authorization", "Token {key}")
+```
+
+It is an `AllKeysExhaustedError`, so existing handlers keep working.
+
 ### Exceptions of the HTTP client
 
 A `POST`/`PATCH` that fails after the request may have been sent (e.g. a read
@@ -167,7 +189,8 @@ processes, share limits via `state_backend=RedisStateBackend(...)` - see
 
 ### Invalid or expired keys
 
-Keys answering `401`/`403` are removed automatically. When all are gone:
+Once requests have succeeded (so the auth header is known to be right), keys
+answering `401`/`403` are removed automatically. When all are gone:
 
 ```python
 from apikeyrotator import APIKeyRotator, AllKeysExhaustedError, AWSSecretsManagerProvider
@@ -395,12 +418,14 @@ logging.basicConfig(level=logging.DEBUG)   # DEBUG shows selected keys (masked) 
 
 ### Requests fail immediately
 
-- `401`/`403` for every key → the keys are invalid; `rotator.key_count` drops to 0 and
-  `AllKeysExhaustedError("All keys are invalid...")` is raised.
+- `AuthenticationError` → every key got `401`/`403` before anything succeeded: the auth
+  header is probably wrong - its message shows what was sent; set `auth=`.
+- `401`/`403` for every key after earlier successes → the keys were revoked;
+  `rotator.key_count` drops to 0 and `AllKeysExhaustedError` is raised.
 - A `404`/`400` is returned without retries → check the URL and parameters.
 - `CircuitOpenError` → the host failed repeatedly; see `rotator.get_circuit_states()`.
-- Wrong auth header? Add `LoggingMiddleware()` with `logging.DEBUG` to see the
-  headers (secrets redacted), or set the header yourself with `header_callback`.
+- To see every header sent, add `LoggingMiddleware()` with `logging.DEBUG` (secrets
+  redacted).
 
 ### Requests take too long
 

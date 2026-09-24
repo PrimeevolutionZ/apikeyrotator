@@ -30,6 +30,7 @@ from .core.exceptions import (
     AllKeysExhaustedError,
     AllProvidersExhaustedError,
     APIKeyError,
+    AuthenticationError,
     CircuitOpenError,
     DeadlineExceededError,
     HTTPStatusError,
@@ -95,7 +96,7 @@ from .utils import (
 )
 
 
-__version__ = "0.8.1"
+__version__ = "0.8.2"
 __author__ = "Prime Evolution"
 
 __all__ = [
@@ -109,6 +110,7 @@ __all__ = [
     "HTTPStatusError",
     "DeadlineExceededError",
     "CircuitOpenError",
+    "AuthenticationError",
     "parse_keys",
     "ConfigLoader",
 

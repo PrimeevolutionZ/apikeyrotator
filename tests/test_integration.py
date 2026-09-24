@@ -65,8 +65,8 @@ class TestRotationStrategies:
                 rotator.get('http://example.com')
                 # Extract key from Authorization header
                 auth = mock_request.call_args[1]['headers'].get('Authorization', '')
-                if auth.startswith('Key '):
-                    keys_used.append(auth.replace('Key ', ''))
+                if auth.startswith('Bearer '):
+                    keys_used.append(auth.replace('Bearer ', ''))
 
         # Should cycle through keys
         assert keys_used == ['key1', 'key2', 'key3', 'key1', 'key2', 'key3']
@@ -95,8 +95,8 @@ class TestRotationStrategies:
             for _ in range(100):
                 rotator.get('http://example.com')
                 auth = mock_request.call_args[1]['headers'].get('Authorization', '')
-                if auth.startswith('Key '):
-                    keys_used.append(auth.replace('Key ', ''))
+                if auth.startswith('Bearer '):
+                    keys_used.append(auth.replace('Bearer ', ''))
 
         # key1 should be used ~70% of the time
         key1_count = keys_used.count('key1')

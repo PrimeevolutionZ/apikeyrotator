@@ -2,6 +2,30 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
+## [0.8.2] - 2026-09-24
+
+Developer-experience release: fewer surprises, clearer errors.
+
+### Breaking changes
+- **No implicit file reads.** `load_env_file` now defaults to `False` and `config_file` to `None`: the rotator no longer loads `./.env` into `os.environ` or reads `./rotator_config.json` unless asked. Pass `load_env_file=True` / `config_file="..."` to keep the old behaviour. `NoAPIKeysError` says so when a `.env` file is present.
+- **Default auth header**: keys that are not 32 characters long are sent as `Authorization: Bearer <key>` (was the non-standard `Authorization: Key <key>`). Use `auth=` to choose the scheme explicitly.
+- `should_retry_callback` receives the response object in `AsyncAPIKeyRotator` too (it received the status code) - the same callback now works with both rotators.
+
+### Added
+- **`auth=`**: `"bearer"`, `"x-api-key"`, `(header, template)` such as `("Authorization", "Token {key}")` or `("x-goog-api-key", "{key}")`, or `False` for no auth header. Writable later (`rotator.auth = ...`).
+- **`AuthenticationError`** (an `AllKeysExhaustedError`): raised when every key is rejected with 401/403 before any request succeeded, with the header that was sent (key masked) and the status per key.
+
+### Fixed
+- **A wrong auth header no longer destroys the key pool.** Previously every key answering 401/403 was removed immediately (and, with a shared state backend, marked invalid for all instances), so a misconfigured header left an empty pool and the message "All keys are invalid". Until a request has been accepted, rejected keys are now kept, the other keys are tried, and `AuthenticationError` explains the likely cause; once any request succeeds, the keys rejected earlier are removed as before.
+- `load_env_file=True` searched for `.env` from the library's own directory, so it never found the application's `.env` once the package was installed; it now searches from the working directory.
+- The default auth header is not added when `header_callback` already sends the key in some other header (it was sent twice).
+- `AsyncAPIKeyRotator` runs the `*_sync` hooks of middlewares that don't inherit from `RotatorMiddleware` and have no async hooks (they were silently skipped).
+
+### Changed
+- `APIKeyRotator` warns (`UserWarning`) when a middleware implements only async hooks, which a sync rotator never calls.
+- No emoji in log messages, error messages or documentation.
+- The benchmark history job uses the same size as `benchmarks/RESULTS.md` (`-n 5000 -r 3`), so the charts and the reference table are comparable.
+
 ## [0.8.1] - 2026-09-24
 
 ### Changed
@@ -23,7 +47,7 @@ All notable changes to APIKeyRotator will be documented in this file.
 
 ## [0.8.0] - 2026-09-24
 
-### ⚠️ Breaking changes
+### Breaking changes
 - **Python 3.12+ is required** (was 3.8+). The code base uses modern syntax (`X | None`, `list[...]`, slots dataclasses).
 - **Logging**: the library no longer attaches a `StreamHandler` or sets log levels. A `NullHandler` is attached to the `apikeyrotator` logger; call `logging.basicConfig(level=logging.INFO)` in your application to see messages.
 - **POST/PATCH are no longer retried after errors where the request may already have been processed** (`500`, `502`, `504`, read timeouts, dropped connections) - the response is returned / the exception re-raised. They are still retried on `429`, `503`, `408`, `425`, connection failures and key rejections (`401`/`403`). Restore the old behaviour with `retry_non_idempotent=True` or per request with an `Idempotency-Key` header.

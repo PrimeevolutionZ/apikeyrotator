@@ -10,12 +10,27 @@ name: Release
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: "Commit to release (default: the commit that triggered the caller)"
+        type: string
+        required: false
+        default: ""
+      latest:
+        description: "Mark the release as the latest one"
+        type: boolean
+        required: false
+        default: true
   workflow_dispatch:
     inputs:
       ref:
         description: "Commit or branch to release (its pyproject.toml version becomes the tag)"
         required: true
         default: master
+      latest:
+        description: "Mark the release as the latest one"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -110,7 +125,8 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "::notice::release $TAG already exists"
           else
-            gh release create "$TAG" dist/* --verify-tag --title "apikeyrotator $TAG" --notes-file notes.md
+            gh release create "$TAG" dist/* --verify-tag --title "apikeyrotator $TAG" --notes-file notes.md \
+              --latest="${{ inputs.latest }}"
           fi
 
       - uses: actions/upload-artifact@v4

@@ -42,13 +42,13 @@ APIKeyRotator(
     api_keys=None, env_var="API_KEYS", max_retries=3, base_delay=1.0, timeout=10.0,
     should_retry_callback=None, header_callback=None, user_agents=None,
     random_delay_range=None, proxy_list=None, logger=None,
-    config_file="rotator_config.json", load_env_file=True, error_classifier=None,
+    config_file=None, error_classifier=None,
     config_loader=None, rotation_strategy="round_robin", rotation_strategy_kwargs=None,
     middlewares=None, secret_provider=None, enable_metrics=True,
     save_sensitive_headers=False, max_delay=60.0, pool_size=100, recovery_timeout=None,
     total_timeout=None, retry_non_idempotent=False, circuit_breaker=None,
     key_rate_limit=None, respect_rate_limit_headers=True, state_backend=None,
-    state_sync_interval=1.0, auto_refresh_interval=None,
+    state_sync_interval=1.0, auto_refresh_interval=None, auth=None,
     *, http_backend="requests", http2=False, http_client_kwargs=None,
 )
 ```
@@ -59,7 +59,7 @@ APIKeyRotator(
 |---|---|---|---|
 | `api_keys` | `list[str] \| str \| None` | `None` | Keys as a list or a comma-separated string. If `None`, keys come from `secret_provider`, else from the `env_var` environment variable. Duplicates and blanks are removed. |
 | `env_var` | `str` | `"API_KEYS"` | Environment variable with comma-separated keys. |
-| `load_env_file` | `bool` | `True` | Load a `.env` file first (if `python-dotenv` is installed). |
+| `load_env_file` | `bool` | `False` | Load the `.env` file of the working directory (or its parents) into `os.environ` first. Needs `python-dotenv`. Off by default: the library does not change the process environment unless asked. |
 | `secret_provider` | `SecretProvider \| None` | `None` | Source of keys (env, file, AWS, GCP...). See [Secret Providers](#secret-providers). |
 | `auto_refresh_interval` | `float \| None` | `None` | Reload keys from `secret_provider` every N seconds in the background. Requires `secret_provider`. |
 | `rotation_strategy` | `str \| RotationStrategy \| BaseRotationStrategy` | `"round_robin"` | `"round_robin"`, `"random"`, `"weighted"`, `"lru"`, `"health_based"`, `"failover"`, or a strategy instance. |
@@ -76,7 +76,7 @@ APIKeyRotator(
 | `timeout` | `float` | `10.0` | Timeout of one attempt, seconds. Overridable per request (`timeout=`). |
 | `total_timeout` | `float \| None` | `None` | Time budget of the whole request (all attempts and waits). Overridable per request (`total_timeout=`). Raises `DeadlineExceededError`. |
 | `retry_non_idempotent` | `bool` | `False` | Also retry `POST`/`PATCH` after errors where the request may already have been processed. See [Retry behaviour](#retry-behaviour). |
-| `should_retry_callback` | `Callable \| None` | `None` | `callback(response) -> bool` (sync) / `callback(status: int) -> bool` (async). Return `True` to retry an otherwise successful response. |
+| `should_retry_callback` | `Callable \| None` | `None` | `callback(response) -> bool`, called with the backend's response object (`requests`/`aiohttp`/`httpx`) in both rotators. Return `True` to retry an otherwise successful response. |
 | `error_classifier` | `ErrorClassifier \| None` | `None` | Custom classification of statuses/exceptions. |
 
 **Resilience & rate limits**
@@ -93,7 +93,8 @@ APIKeyRotator(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `header_callback` | `Callable \| None` | `None` | `callback(key, headers) -> dict` or `-> (headers, cookies)`; its headers are merged into every request. |
+| `auth` | `str \| tuple[str, str] \| bool \| None` | `None` | How the key is sent. `"bearer"` = `Authorization: Bearer <key>`, `"x-api-key"` = `X-API-Key: <key>`, `(header, template)` e.g. `("Authorization", "Token {key}")` or `("x-goog-api-key", "{key}")`, `False` = no auth header. `None` infers it: `X-API-Key` for 32-character keys, `Bearer` otherwise. |
+| `header_callback` | `Callable \| None` | `None` | `callback(key, headers) -> dict` or `-> (headers, cookies)`; its headers are merged into every request. If they contain the key, no auth header is added. |
 | `user_agents` | `list[str] \| None` | `None` | User-Agent strings rotated per request (only if the request sets none). |
 | `random_delay_range` | `tuple[float, float] \| None` | `None` | Random pause `(min, max)` seconds before each attempt. |
 | `proxy_list` | `list[str] \| None` | `None` | Proxy URLs rotated per attempt. |
@@ -101,7 +102,7 @@ APIKeyRotator(
 | `middlewares` | `list[RotatorMiddleware] \| None` | `None` | Request/response hooks. See [Middleware](#middleware). |
 | `enable_metrics` | `bool` | `True` | Collect `RotatorMetrics` (`get_metrics()`). |
 | `logger` | `logging.Logger \| None` | `None` | Logger to use (default: `logging.getLogger("apikeyrotator.core.rotator")`, no handler attached). |
-| `config_file` / `config_loader` | `str` / `ConfigLoader \| None` | `"rotator_config.json"` / `None` | Persistent config (used with `save_sensitive_headers`). |
+| `config_file` / `config_loader` | `str \| None` / `ConfigLoader \| None` | `None` / `None` | JSON/YAML config read at start (used with `save_sensitive_headers`). Nothing is read unless one is given. |
 | `save_sensitive_headers` | `bool` | `False` | Apply headers saved in the config (`successful_headers`, auth headers excluded) to requests for the same domain. |
 | `http_backend` *(keyword-only)* | `str` | `"requests"` (sync) / `"aiohttp"` (async) | `"httpx"` for either rotator (`pip install apikeyrotator[httpx]`). |
 | `http2` *(keyword-only)* | `bool` | `False` | HTTP/2 - httpx backend only. |
@@ -110,10 +111,16 @@ APIKeyRotator(
 **Raises** at construction: `NoAPIKeysError` (no keys found), `ValueError` (invalid
 parameters, e.g. `max_retries < 1`, `auto_refresh_interval` without `secret_provider`).
 
-**Authorization header.** If neither the request nor `header_callback` sets an
-`Authorization` or `X-API-Key` header, one is added: `Bearer <key>` for keys starting with `sk-`/`pk-`, `X-API-Key: <key>` for
-32-character keys, otherwise `Authorization: Key <key>`. Use `header_callback`
-for any other scheme.
+**Authorization header.** Set it with `auth=` (see the table). Without it, the rotator
+sends `X-API-Key: <key>` for 32-character keys and `Authorization: Bearer <key>` for all
+others. Nothing is added when the request or `header_callback` already sets
+`Authorization` / `X-API-Key` or a header containing the key.
+
+**A wrong auth header does not destroy the key pool.** Until one request has been
+accepted by the API, a `401`/`403` may mean "wrong header format" rather than "bad key":
+the rotator then tries the other keys, and if all of them are rejected it raises
+`AuthenticationError` with the header it sent - the keys are kept and not reported to a
+shared state backend. Once any request succeeds, keys rejected earlier are removed.
 
 ### Retry behaviour
 
@@ -121,7 +128,7 @@ for any other scheme.
 |---|---|
 | `2xx` / `3xx` | Returns the response. If it reports `X-RateLimit-Remaining: 0`, the key is parked until the reset. |
 | `429` | Parks the key (until `Retry-After` / `X-RateLimit-Reset`, else a backoff interval) and retries **immediately** with another key; waits only if every key is parked (until the earliest frees up, capped by `max_delay`). |
-| `401`, `403` | Removes the key from rotation (and from shared state) and retries with another key. |
+| `401`, `403` | Removes the key from rotation (and from shared state) and retries with another key. Before the first accepted request: keeps the key, tries the others, raises `AuthenticationError` if all are rejected. |
 | other `4xx` (`400`, `404`, `422`...) | Returns the response - no retry, the key is kept. |
 | `5xx` | Retries with backoff (`Retry-After` honoured). |
 | Network error | Retries with backoff. |
@@ -211,7 +218,8 @@ APIKeyError
 ├── NoAPIKeysError
 ├── AllKeysExhaustedError          (.last_response, .last_exception)
 │   ├── DeadlineExceededError      (also a TimeoutError)
-│   └── CircuitOpenError           (.host, .retry_after)
+│   ├── CircuitOpenError           (.host, .retry_after)
+│   └── AuthenticationError        (.statuses, .auth_header)
 ├── AllProvidersExhaustedError
 └── HTTPStatusError                (.status_code)
 ```
@@ -221,6 +229,7 @@ APIKeyError
 | `NoAPIKeysError` | No keys were given or found (`parse_keys`, rotator constructor). |
 | `AllKeysExhaustedError(message, last_response=None, last_exception=None)` | All attempts failed or no keys are left. `last_response` is the last HTTP response (released for async), `last_exception` the last network error. |
 | `DeadlineExceededError` | The request's `total_timeout` was spent. `FallbackRouter` re-raises it instead of trying other providers. |
+| `AuthenticationError` | Every key was rejected (`401`/`403`) before any request succeeded - usually a wrong auth header. The message shows the header that was sent (key masked); `statuses` maps masked keys to status codes. Keys are kept. |
 | `CircuitOpenError(host, retry_after)` | The circuit breaker for `host` is open; `retry_after` = seconds until a probe is allowed. `FallbackRouter` moves to the next provider. |
 | `AllProvidersExhaustedError` | `FallbackRouter`: every route failed and no `on_all_exhausted` callback is set. |
 | `HTTPStatusError(status_code)` | Passed to middleware `on_error` hooks for error responses; raised by `raise_for_status()` of cached async responses. |
