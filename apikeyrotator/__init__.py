@@ -24,6 +24,8 @@ from .core import (
     APIKeyRotator,
     AsyncAPIKeyRotator,
     ConfigLoader,
+    Headers,
+    UnifiedResponse,
     parse_keys,
 )
 from .core.exceptions import (
@@ -113,6 +115,8 @@ __all__ = [
     "AuthenticationError",
     "parse_keys",
     "ConfigLoader",
+    "UnifiedResponse",
+    "Headers",
 
     # Strategies
     "RotationStrategy",

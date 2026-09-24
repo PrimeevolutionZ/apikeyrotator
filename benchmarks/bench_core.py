@@ -392,6 +392,18 @@ def _overhead_cache(n: int) -> dict[str, Any]:
     return stats
 
 
+@scenario("overhead_sync_unified", "overhead", "Sync overhead with unified_response=True")
+def _overhead_sync_unified(n: int) -> dict[str, Any]:
+    rotator = make_sync_rotator(Upstream(), _keys(10), unified_response=True)
+    return run_sync(rotator, n)
+
+
+@scenario("overhead_async_unified", "overhead", "Async overhead with unified_response=True, sequential")
+def _overhead_async_unified(n: int) -> dict[str, Any]:
+    rotator = make_async_rotator(Upstream(), _keys(10), unified_response=True)
+    return asyncio.run(run_async(rotator, n, concurrency=1))
+
+
 @scenario("overhead_async", "overhead", "Async request overhead, 10 keys, sequential")
 def _overhead_async(n: int) -> dict[str, Any]:
     upstream = Upstream()

@@ -62,9 +62,11 @@ class HTTPStatusError(APIKeyError):
     when the server answers with a retryable or permanent error status.
     """
 
-    def __init__(self, status_code: int, message: str = ""):
+    def __init__(self, status_code: int, message: str = "", response: Any | None = None):
         super().__init__(message or f"HTTP {status_code}")
         self.status_code = status_code
+        #: The response (set by UnifiedResponse.raise_for_status())
+        self.response = response
 
 
 class DeadlineExceededError(AllKeysExhaustedError, TimeoutError):

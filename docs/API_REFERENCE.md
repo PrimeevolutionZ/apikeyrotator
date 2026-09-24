@@ -48,7 +48,7 @@ APIKeyRotator(
     save_sensitive_headers=False, max_delay=60.0, pool_size=100, recovery_timeout=None,
     total_timeout=None, retry_non_idempotent=False, circuit_breaker=None,
     key_rate_limit=None, respect_rate_limit_headers=True, state_backend=None,
-    state_sync_interval=1.0, auto_refresh_interval=None, auth=None,
+    state_sync_interval=1.0, auto_refresh_interval=None, auth=None, unified_response=False,
     *, http_backend="requests", http2=False, http_client_kwargs=None,
 )
 ```
@@ -106,6 +106,7 @@ APIKeyRotator(
 | `save_sensitive_headers` | `bool` | `False` | Apply headers saved in the config (`successful_headers`, auth headers excluded) to requests for the same domain. |
 | `http_backend` *(keyword-only)* | `str` | `"requests"` (sync) / `"aiohttp"` (async) | `"httpx"` for either rotator (`pip install apikeyrotator[httpx]`). |
 | `http2` *(keyword-only)* | `bool` | `False` | HTTP/2 - httpx backend only. |
+| `unified_response` | `bool` | `False` | Return a [`UnifiedResponse`](#unified-responses) - the same object for requests, aiohttp and httpx, sync and async. Writable later. |
 | `http_client_kwargs` *(keyword-only)* | `dict \| None` | `None` | Client-level settings: for requests they are set on the `Session` (e.g. `verify`, `cert`); for aiohttp/httpx they are passed to the `ClientSession` / `httpx.Client` constructor (e.g. httpx `transport=`, `verify=`; aiohttp `connector_owner=`, `trust_env=`). |
 
 **Raises** at construction: `NoAPIKeysError` (no keys found), `ValueError` (invalid
@@ -191,6 +192,42 @@ async with AsyncAPIKeyRotator(api_keys=["key1", "key2"]) as rotator:
 
 State backends that do network I/O (Redis) are called in a worker thread, so the
 event loop is never blocked.
+
+### Unified responses
+
+With `unified_response=True` every rotator and backend returns the same
+`UnifiedResponse`, with the body already read - so the code is identical for
+requests, httpx and aiohttp, and `json()` is never awaited:
+
+```python
+from apikeyrotator import APIKeyRotator, AsyncAPIKeyRotator
+
+rotator = APIKeyRotator(api_keys=["key1"], unified_response=True)   # or http_backend="httpx"
+response = rotator.get("https://api.example.com/data")
+data = response.json()
+
+async def main():
+    async with AsyncAPIKeyRotator(api_keys=["key1"], unified_response=True) as rotator:
+        response = await rotator.get("https://api.example.com/data")
+        data = response.json()             # same API - no await
+```
+
+| Attribute / method | Description |
+|---|---|
+| `status_code` (`status`) | HTTP status. |
+| `ok` | `status_code < 400`. The object itself is always truthy - test `ok`, not `if response:`. |
+| `reason` (`reason_phrase`) | Status text, e.g. `"OK"`. |
+| `headers` | Case-insensitive `Headers` mapping; repeated headers are joined with `", "`, `headers.get_list("Set-Cookie")` returns them separately. |
+| `content`, `text`, `json(**kwargs)` | Body as bytes / str (charset from `Content-Type`, default utf-8; `encoding` can be set) / parsed JSON. |
+| `url`, `elapsed` | Final URL; time to the response as `timedelta`. |
+| `raise_for_status()` | Raises `HTTPStatusError` (with `.status_code` and `.response`) for 4xx/5xx, returns the response otherwise. |
+| `native` | The client's own response (`requests.Response`, `aiohttp.ClientResponse`, `httpx.Response`), already released; `None` for cache hits. |
+| `close()`, `release()`, `await aclose()`, `with` / `async with` | No-ops (the connection is already back in the pool), so existing code keeps working. |
+
+The same object is used for `AllKeysExhaustedError.last_response` (its body stays
+readable in async too), cache hits and `should_retry_callback`. Not available with
+`stream=True` (raises `ValueError`) - streaming needs the client's own response.
+Cost: about 2-3 µs per request (`overhead_*_unified` in the benchmark).
 
 **Keys from a secret provider.** Created inside a running event loop with
 `secret_provider=` and no `api_keys`, the async rotator does not call the provider in the

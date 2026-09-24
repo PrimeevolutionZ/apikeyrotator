@@ -169,6 +169,20 @@ rotator = APIKeyRotator()                      # reads API_KEYS
 response = rotator.get("https://api.example.com/data")
 ```
 
+### One Response Type for Every HTTP Client
+
+```python
+from apikeyrotator import APIKeyRotator
+
+# requests, httpx or aiohttp (async) - same response object, same API
+rotator = APIKeyRotator(api_keys=["key1"], http_backend="httpx", unified_response=True)
+response = rotator.get("https://api.example.com/data")
+print(response.status_code, response.headers["content-type"], response.json())
+```
+
+In `AsyncAPIKeyRotator` the body is read for you, so `response.json()` is not awaited
+either. See [Unified responses](docs/API_REFERENCE.md#unified-responses).
+
 ### Advanced Configuration
 
 ```python

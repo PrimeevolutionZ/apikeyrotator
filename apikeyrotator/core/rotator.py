@@ -56,7 +56,7 @@ from .request_builder import (  # noqa: F401 - re-exported for backwards compati
     RequestBuilder,
     infer_auth_header,
 )
-from .responses import build_async_response, build_sync_response
+from .responses import UnifiedResponse, build_async_response, build_sync_response
 from .shared_state import StateSync
 from .transport import (
     AsyncTransport,
@@ -118,7 +118,7 @@ class BaseKeyRotator:
       ``proxy_list``, ``config_file``, ``config_loader``, ``save_sensitive_headers``
     - observability & extensions: ``middlewares``, ``enable_metrics``,
       ``error_classifier``, ``logger``
-    - HTTP client: ``pool_size`` (+ ``http_backend``, ``http2``,
+    - HTTP client: ``pool_size``, ``unified_response`` (+ ``http_backend``, ``http2``,
       ``http_client_kwargs`` in the subclasses)
 
     See docs/API_REFERENCE.md for every argument.
@@ -146,6 +146,7 @@ class BaseKeyRotator:
     state_sync_interval = _Delegate('_state', 'sync_interval')
     middlewares = _Delegate('_chain', 'middlewares')
     metrics = _Delegate('_engine', 'metrics')
+    unified_response = _Delegate('_engine', 'unified')
     error_classifier = _Delegate('_engine', 'classifier')
 
     def __init__(
@@ -183,6 +184,7 @@ class BaseKeyRotator:
             state_sync_interval: float = 1.0,
             auto_refresh_interval: float | None = None,
             auth: str | tuple[str, str] | bool | None = None,
+            unified_response: bool = False,
     ):
         self._logger = logger if logger else logging.getLogger(__name__)
 
@@ -263,6 +265,7 @@ class BaseKeyRotator:
             classifier=error_classifier or ErrorClassifier(),
             logger=self._logger, sync=self._SYNC,
         )
+        self._engine.unified = bool(unified_response)
 
         self._log_initialization_summary()
 
@@ -521,7 +524,7 @@ class APIKeyRotator(BaseKeyRotator):
 
     # --- request ---
 
-    def request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def request(self, method: str, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         self._validate_url(url)
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.debug("Initiating %s request to %s", method, url)
@@ -550,6 +553,8 @@ class APIKeyRotator(BaseKeyRotator):
                 elif tag == DONE:
                     return effect[1]
                 elif tag == SHORT:  # middleware short-circuit (e.g. cache hit)
+                    if self._engine.unified:
+                        return UnifiedResponse.from_info(effect[1], effect[2])
                     return build_sync_response(effect[1], effect[2], transport.name)
                 elif tag == SLEEP:
                     time.sleep(effect[1])
@@ -577,22 +582,22 @@ class APIKeyRotator(BaseKeyRotator):
             except BaseException as e:  # deliver into the engine so its cleanup runs
                 error, value = e, None
 
-    def get(self, url: str, **kwargs) -> requests.Response:
+    def get(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         return self.request("GET", url, **kwargs)
 
-    def post(self, url: str, **kwargs) -> requests.Response:
+    def post(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         return self.request("POST", url, **kwargs)
 
-    def put(self, url: str, **kwargs) -> requests.Response:
+    def put(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         return self.request("PUT", url, **kwargs)
 
-    def patch(self, url: str, **kwargs) -> requests.Response:
+    def patch(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         return self.request("PATCH", url, **kwargs)
 
-    def delete(self, url: str, **kwargs) -> requests.Response:
+    def delete(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         return self.request("DELETE", url, **kwargs)
 
-    def head(self, url: str, **kwargs) -> requests.Response:
+    def head(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
         return self.request("HEAD", url, **kwargs)
 
 
@@ -717,7 +722,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
     # --- request ---
 
-    async def request(self, method: str, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def request(self, method: str, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         self._validate_url(url)
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.debug("Initiating async %s request to %s", method, url)
@@ -749,6 +754,8 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
                 elif tag == DONE:
                     return effect[1]
                 elif tag == SHORT:  # middleware short-circuit (e.g. cache hit)
+                    if self._engine.unified:
+                        return UnifiedResponse.from_info(effect[1], effect[2])
                     return build_async_response(effect[1], effect[2])
                 elif tag == SLEEP:
                     await asyncio.sleep(effect[1])
@@ -776,20 +783,20 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
             except BaseException as e:  # deliver into the engine so its cleanup runs
                 error, value = e, None
 
-    async def get(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def get(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("GET", url, **kwargs)
 
-    async def post(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def post(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("POST", url, **kwargs)
 
-    async def put(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def put(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("PUT", url, **kwargs)
 
-    async def patch(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def patch(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("PATCH", url, **kwargs)
 
-    async def delete(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def delete(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("DELETE", url, **kwargs)
 
-    async def head(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def head(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("HEAD", url, **kwargs)

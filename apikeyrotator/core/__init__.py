@@ -10,6 +10,7 @@ from .exceptions import (
     NoAPIKeysError,
 )
 from .key_parser import parse_keys
+from .responses import Headers, UnifiedResponse
 from .rotator import APIKeyRotator, AsyncAPIKeyRotator
 
 
@@ -25,5 +26,7 @@ __all__ = [
     "CircuitOpenError",
     "AuthenticationError",
     "parse_keys",
+    "UnifiedResponse",
+    "Headers",
     "ConfigLoader",
 ]

@@ -4,6 +4,11 @@ All notable changes to APIKeyRotator will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`unified_response=True`**: every rotator and HTTP backend (requests, httpx, aiohttp; sync and async) returns the same `UnifiedResponse` - `status_code`, case-insensitive `headers` (with `get_list()` for repeated headers), `content` / `text` / `json()` without `await`, `ok`, `reason`, `url`, `elapsed`, `raise_for_status()` and the client's own object as `native`. The body is read and the connection returned to the pool; `AllKeysExhaustedError.last_response`, cache hits and `should_retry_callback` use the same object. About 2-3 µs per request; off by default.
+- `HTTPStatusError.response`.
+- Benchmark scenarios `overhead_sync_unified` and `overhead_async_unified`.
+
 ### CI
 - GitHub Actions updated to their Node 24 versions (`checkout@v5`, `setup-python@v6`, `upload-artifact@v5`, `download-artifact@v5`).
 - The release workflow takes `ref` and `latest` inputs (release any commit, optionally not as the latest release). The tag for 0.8.0 could not be created retroactively: GitHub does not let the workflow token create a tag on a commit whose workflow files differ from the current ones. The 0.8.0 changes are listed below and shipped in 0.8.1+.

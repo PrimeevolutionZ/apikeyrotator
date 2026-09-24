@@ -59,7 +59,7 @@ from .limits import RateLimiter
 from .middleware_chain import MiddlewareChain
 from .policy import RetryPolicy
 from .request_builder import RequestBuilder
-from .responses import StatusView
+from .responses import StatusView, UnifiedResponse
 from .shared_state import Report, StateSync
 from .util import endpoint_label, host_of, mask_key
 
@@ -148,7 +148,7 @@ class RequestEngine:
     """
 
     __slots__ = ('pool', 'policy', 'limiter', 'breakers', 'state', 'builder', 'chain',
-                 'metrics', 'classifier', 'logger', 'sync', 'status_of')
+                 'metrics', 'classifier', 'logger', 'sync', 'status_of', 'unified')
 
     def __init__(self, *, pool: KeyPool, policy: RetryPolicy, limiter: RateLimiter,
                  breakers: BreakerRegistry, state: StateSync, builder: RequestBuilder,
@@ -168,6 +168,8 @@ class RequestEngine:
         #: object, the newest failed response is kept open, a timeout is always passed.
         self.sync = sync
         self.status_of: Callable[[Any], int] = lambda response: response.status_code
+        #: unified_response=True: every response is read and returned as UnifiedResponse
+        self.unified = False
 
     # ------------------------------------------------------------------
     # The loop
@@ -185,6 +187,12 @@ class RequestEngine:
         # Async rotators run blocking backend calls (Redis) in a worker thread
         offload = not sync and state.blocking
         stream = sync and bool(kwargs.get("stream"))
+        unified = self.unified
+        if unified and kwargs.get("stream"):
+            raise ValueError("stream=True needs the client's own response; it is not supported "
+                             "with unified_response=True")
+        # Native responses hold a connection until released; unified ones don't
+        release_native = not unified
 
         ctx = RequestContext(
             method, url,
@@ -242,17 +250,22 @@ class RequestEngine:
                 status = response.status_code if sync else self.status_of(response)
                 headers = response.headers
 
+                content = None
+                if (middlewares or unified) and not stream:
+                    # Middlewares (e.g. caching) and unified responses need the body; clients
+                    # cache it, so the caller can still read a native response.
+                    content = yield (READ, response)
+                    if content.__class__ is NetworkFailure:
+                        yield (RELEASE, response)
+                        yield from self._network_failure(ctx, key, content, start, request_info)
+                        continue
+                if unified:
+                    # The body is fully read, so every client has already returned the
+                    # connection to its pool - no RELEASE needed
+                    response = UnifiedResponse.from_native(response, status, content, request_time)
+
                 response_info = None
                 if middlewares:
-                    # Middlewares (e.g. caching) see the body; clients cache it, so the
-                    # caller can still read it.
-                    content = None
-                    if not stream:
-                        content = yield (READ, response)
-                        if content.__class__ is NetworkFailure:
-                            yield (RELEASE, response)
-                            yield from self._network_failure(ctx, key, content, start, request_info)
-                            continue
                     response_info = ResponseInfo(
                         status_code=status, headers=dict(headers), content=content,
                         request_info=request_info, response_time=request_time,
@@ -262,7 +275,7 @@ class RequestEngine:
                 action, error_type = self._evaluate(ctx, key, status, headers, response, request_time)
 
                 if action is Action.RETURN:
-                    if sync and ctx.last_response is not None:
+                    if sync and release_native and ctx.last_response is not None:
                         yield (RELEASE, ctx.last_response)
                     result = response
                     break
@@ -273,7 +286,9 @@ class RequestEngine:
                         request_info=request_info, response_info=response_info,
                     ))
 
-                if sync:
+                if not release_native:
+                    pass
+                elif sync:
                     # Keep only the newest failed response open - it is exposed via
                     # AllKeysExhaustedError.last_response
                     if ctx.last_response is not None:
@@ -399,7 +414,7 @@ class RequestEngine:
     def _evaluate(self, ctx: RequestContext, key: str, status_code: int, headers: Any,
                   response: Any, request_time: float) -> tuple[Action, ErrorType | None]:
         """Classifies a response, records it and decides what the loop does next."""
-        if self.sync:
+        if self.sync or self.unified:
             classifier_response = callback_arg = response
         else:
             classifier_response, callback_arg = StatusView(status_code, headers), response
