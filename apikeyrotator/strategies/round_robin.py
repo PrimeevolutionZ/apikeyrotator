@@ -2,6 +2,7 @@
 Round Robin rotation strategy
 """
 
+import time
 from typing import List, Dict, Optional
 from .base import BaseRotationStrategy, KeyMetrics
 
@@ -47,24 +48,30 @@ class RoundRobinRotationStrategy(BaseRotationStrategy):
         Raises:
             ValueError: If no keys are available
         """
-        # Use single lock for entire operation to avoid potential deadlock
         with self._lock:
-            if not self._keys:
+            keys = self._keys
+            n = len(keys)
+            if n == 0:
                 raise ValueError("No keys available in rotation")
 
-            # Get list of healthy keys
-            healthy_keys = self._get_healthy_keys(current_key_metrics)
+            start = self._current_index % n
+            if current_key_metrics:
+                # Walk forward from the current position and take the first
+                # available key: O(1) when most keys are healthy, instead of
+                # building the full healthy list on every call.
+                now = time.time()
+                recovery_timeout = self.recovery_timeout
+                get = current_key_metrics.get
+                available = self._key_available
+                for offset in range(n):
+                    idx = (start + offset) % n
+                    if available(get(keys[idx]), now, recovery_timeout):
+                        self._current_index = (idx + 1) % n
+                        return keys[idx]
 
-            if not healthy_keys:
-                # Fallback: use all keys if no healthy ones
-                healthy_keys = self._keys.copy()
-
-            # Ensure index is within list bounds
-            self._current_index = self._current_index % len(healthy_keys)
-            key = healthy_keys[self._current_index]
-            self._current_index = (self._current_index + 1) % len(healthy_keys)
-
-        return key
+            # No metrics, or no available keys: plain rotation over all keys
+            self._current_index = (start + 1) % n
+            return keys[start]
 
     def __repr__(self):
         with self._lock:

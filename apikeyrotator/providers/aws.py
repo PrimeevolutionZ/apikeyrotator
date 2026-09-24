@@ -1,9 +1,10 @@
 """Secret provider for AWS Secrets Manager"""
 
-import json
 import logging
 import asyncio
 from typing import List, Optional
+
+from .base import parse_secret_payload
 
 
 class AWSSecretsManagerProvider:
@@ -50,53 +51,30 @@ class AWSSecretsManagerProvider:
     async def get_keys(self) -> List[str]:
         from ..utils import retry_with_backoff
 
-        def _get_secret_value():
+        def _get_secret_value() -> List[str]:
             client = self._get_client()
             try:
                 response = client.get_secret_value(SecretId=self.secret_name)
-
-                if 'SecretString' in response:
-                    secret = response['SecretString']
-
-                    # Try parsing as JSON
-                    try:
-                        keys_data = json.loads(secret)
-
-                        if isinstance(keys_data, list):
-                            return [str(k).strip() for k in keys_data if str(k).strip()]
-                        elif isinstance(keys_data, dict):
-                            # Extract from 'keys' or 'api_keys'
-                            keys_list = keys_data.get('keys') or keys_data.get('api_keys')
-
-                            if keys_list is None:
-                                keys_list = list(keys_data.values())
-
-                            if isinstance(keys_list, list):
-                                return [str(k).strip() for k in keys_list if str(k).strip()]
-                            elif isinstance(keys_list, str):
-                                return [k.strip() for k in keys_list.split(',') if k.strip()]
-                        elif isinstance(keys_data, str):
-                            return [k.strip() for k in keys_data.split(',') if k.strip()]
-
-                    except json.JSONDecodeError:
-                        # Not JSON - parse as CSV
-                        return [k.strip() for k in secret.split(',') if k.strip()]
-
-                return []
-
             except client.exceptions.ResourceNotFoundException:
+                # Not retryable
                 self.logger.error(f"Secret {self.secret_name} not found in AWS Secrets Manager")
                 return []
-            except Exception as e:
-                self.logger.error(f"Error retrieving secret {self.secret_name}: {e}")
+            # Other errors propagate so retry_with_backoff can retry them
+
+            secret = response.get('SecretString')
+            if secret is None:
                 return []
+            return parse_secret_payload(secret)
+
+        # Fail fast (without retries) if the SDK is not installed
+        self._get_client()
 
         try:
             # Run sync boto3 call in executor to avoid blocking event loop
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, retry_with_backoff, _get_secret_value, 3, 1.0, Exception)
         except Exception as e:
-            self.logger.error(f"Failed to get keys after retries: {e}")
+            self.logger.error(f"Failed to get keys from AWS secret {self.secret_name} after retries: {e}")
             return []
 
     async def refresh_keys(self) -> List[str]:

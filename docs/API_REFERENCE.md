@@ -77,6 +77,17 @@ APIKeyRotator(
 | `secret_provider`        | `Optional[SecretProvider]`                       | `None`                  | Secret provider for loading keys from external sources.                               |
 | `enable_metrics`         | `bool`                                           | `True`                  | Enable built-in metrics collection.                                                   |
 | `save_sensitive_headers` | `bool`                                           | `False`                 | Whether to save sensitive headers (Authorization, X-API-Key) to config.               |
+| `max_delay`              | `float`                                          | `60.0`                  | Upper bound for any single backoff / rate-limit wait (seconds).                       |
+| `pool_size`              | `int`                                            | `100`                   | Size of the HTTP connection pool (requests adapter / aiohttp connector limit).        |
+| `recovery_timeout`       | `Optional[float]`                                | `None` (strategy: 60s)  | Seconds after the last failure when an unhealthy key is probed again.                 |
+
+**Retry behaviour (0.7.0):**
+- `429` — the key is marked rate-limited until `Retry-After` expires and the next available key is used **immediately**; the rotator waits only when every key is rate-limited (until the earliest one frees up, capped by `max_delay`).
+- `5xx` / network errors — exponential backoff (`Retry-After` is honoured for `5xx`), capped by `max_delay`.
+- `401` / `403` — the key is removed and the request is retried with another key.
+- Other `4xx` (`400`, `404`, `422`, ...) — the response is returned to the caller; no retry, the key is kept.
+- When all attempts fail `AllKeysExhaustedError` is raised; it carries `last_response` / `last_exception`.
+- `weighted` strategy by name: pass weights via `rotation_strategy_kwargs={"weights": {"key1": 3, "key2": 1}}` (missing keys default to `1.0`).
 
 **Raises:**
 - `NoAPIKeysError`: If no API keys are provided or found in environment.
@@ -498,27 +509,15 @@ RateLimitMiddleware(
 - `get_stats() -> Dict`: Get rate limit statistics
 - `clear_limits()`: Clear all rate limit records
 
+**Notes (0.7.0):**
+- Pauses only when the quota is used up (`Remaining: 0` or a 429), not merely because a reset time is in the future.
+- `RateLimit-Reset` (delta seconds) and `X-RateLimit-Reset` (UNIX timestamp) are both understood.
+- `max_wait` (default 300s) caps a single pause.
+
 **Features:**
 - Extracts rate limit info from headers (X-RateLimit-*, Retry-After)
 - Automatic waiting when rate limited
 - Per-key rate limit tracking
-
-#### RetryMiddleware
-
-Advanced retry logic beyond the rotator's built-in retries.
-
-```python
-RetryMiddleware(
-    max_retries: int = 3,
-    backoff_factor: float = 2.0,
-    max_tracked_urls: int = 1000,
-    logger: Optional[logging.Logger] = None
-)
-```
-
-**Methods:**
-- `get_stats() -> Dict`: Get retry statistics
-- `clear_retries()`: Clear retry counters
 
 ### Middleware Data Models
 

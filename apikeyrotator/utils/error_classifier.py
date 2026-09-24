@@ -1,6 +1,55 @@
+import time
+from email.utils import parsedate_to_datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Mapping, Optional
 import requests
+
+
+def get_header(headers: Optional[Mapping[str, Any]], name: str) -> Optional[str]:
+    """
+    Case-insensitive header lookup that works for plain dicts as well as
+    requests/aiohttp case-insensitive mappings.
+    """
+    if not headers:
+        return None
+    try:
+        value = headers.get(name)
+    except AttributeError:
+        return None
+    if value is not None:
+        return value
+    name_lower = name.lower()
+    for k, v in headers.items():
+        if isinstance(k, str) and k.lower() == name_lower:
+            return v
+    return None
+
+
+def parse_retry_after(headers: Optional[Mapping[str, Any]]) -> Optional[float]:
+    """
+    Parses the ``Retry-After`` header.
+
+    Supports both forms defined by RFC 9110: delay in seconds (integer or
+    fractional) and an HTTP-date.
+
+    Returns:
+        Delay in seconds (>= 0) or None if the header is missing/invalid.
+    """
+    value = get_header(headers, 'Retry-After')
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        target = parsedate_to_datetime(value).timestamp()
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    return max(0.0, target - time.time())
 
 
 class ErrorType(Enum):
@@ -224,11 +273,12 @@ class ErrorClassifier:
         Returns:
             bool: True if key should be removed, False otherwise
         """
-        error_type = self.classify_error(response, exception)
-        # Remove only on explicitly permanent errors (401, 403)
-        if response and response.status_code in [401, 403]:
-            return True
-        return error_type == ErrorType.PERMANENT and response and response.status_code in [401, 403]
+        # NOTE: `response is not None` is required here - requests.Response
+        # defines __bool__ as `response.ok`, so an error response is falsy.
+        if response is None:
+            return False
+        # Remove only on explicitly permanent auth errors (401, 403)
+        return response.status_code in (401, 403)
 
     def get_retry_delay(
             self,
@@ -245,24 +295,13 @@ class ErrorClassifier:
         Returns:
             float: Recommended delay in seconds
         """
-        if not response:
+        if response is None:
             return default_delay
 
-        # Check Retry-After header
-        retry_after = response.headers.get('Retry-After')
-        if retry_after:
-            try:
-                # May be number of seconds
-                if retry_after.isdigit():
-                    return float(retry_after)
-                # Or HTTP date
-                from email.utils import parsedate_to_datetime
-                import time
-                target_time = parsedate_to_datetime(retry_after).timestamp()
-                delay = max(0, target_time - time.time())
-                return delay
-            except (ValueError, TypeError):
-                pass
+        # Check Retry-After header (seconds or HTTP-date)
+        retry_after = parse_retry_after(getattr(response, 'headers', None))
+        if retry_after is not None:
+            return retry_after
 
         # For rate limit, usually wait longer
         if response.status_code == 429:

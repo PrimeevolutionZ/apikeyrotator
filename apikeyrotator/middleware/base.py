@@ -1,6 +1,8 @@
 from abc import ABC
-from typing import Dict, Optional, Any, Union
-import logging
+from typing import TYPE_CHECKING, Union
+
+if TYPE_CHECKING:
+    from .models import RequestInfo, ResponseInfo, ErrorInfo
 
 
 class RotatorMiddleware(ABC):

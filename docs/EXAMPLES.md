@@ -1079,7 +1079,6 @@ from apikeyrotator.middleware import (
     CachingMiddleware,
     LoggingMiddleware,
     RateLimitMiddleware,
-    RetryMiddleware
 )
 from apikeyrotator.providers import AWSSecretsManagerProvider
 from dataclasses import dataclass
@@ -1122,7 +1121,6 @@ class EnterpriseAPIClient:
         self.cache = CachingMiddleware(ttl=900, max_cache_size=5000)
         self.logger = LoggingMiddleware(verbose=True)
         self.rate_limit = RateLimitMiddleware(pause_on_limit=True)
-        self.retry = RetryMiddleware(max_retries=5, backoff_factor=2.0)
         
         self.rotator = APIKeyRotator(
             secret_provider=provider,
@@ -1132,7 +1130,6 @@ class EnterpriseAPIClient:
                 self.cache,
                 self.logger,
                 self.rate_limit,
-                self.retry
             ],
             enable_metrics=True
         )
@@ -1181,7 +1178,6 @@ class EnterpriseAPIClient:
         key_stats = self.rotator.get_key_statistics()
         cache_stats = self.cache.get_stats()
         rate_limit_stats = self.rate_limit.get_stats()
-        retry_stats = self.retry.get_stats()
         
         uptime = (datetime.now() - self.metrics.start_time).total_seconds()
         
@@ -1219,10 +1215,6 @@ class EnterpriseAPIClient:
             'rate_limits': {
                 'tracked_keys': rate_limit_stats['tracked_keys'],
                 'active_limits': rate_limit_stats['active_limits']
-            },
-            'retries': {
-                'active_retries': retry_stats['active_retries'],
-                'tracked_urls': retry_stats['tracked_urls']
             },
             'endpoints': rotator_metrics.get('endpoint_stats', {})
         }

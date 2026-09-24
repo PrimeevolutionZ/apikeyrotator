@@ -2,7 +2,9 @@
 
 import os
 import json
-from typing import List
+import asyncio
+import logging
+from typing import List, Optional
 
 
 class FileSecretProvider:
@@ -15,32 +17,42 @@ class FileSecretProvider:
     - One key per line
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, logger: Optional[logging.Logger] = None):
         self.file_path = file_path
+        self.logger = logger if logger else logging.getLogger(__name__)
+
+    def _read_file(self) -> str:
+        with open(self.file_path, 'r', encoding='utf-8') as f:
+            return f.read()
 
     async def get_keys(self) -> List[str]:
         if not os.path.exists(self.file_path):
+            self.logger.warning(f"Keys file {self.file_path} does not exist")
             return []
 
         try:
-            with open(self.file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # File I/O off the event loop
+            loop = asyncio.get_running_loop()
+            content = await loop.run_in_executor(None, self._read_file)
 
             # Try parsing as JSON
             try:
                 keys = json.loads(content)
                 if isinstance(keys, list):
-                    return [str(k).strip() for k in keys if k]
+                    return [str(k).strip() for k in keys if k is not None and str(k).strip()]
             except json.JSONDecodeError:
                 pass
 
-            # Parse as CSV or line-by-line
-            if ',' in content:
-                return [k.strip() for k in content.split(",") if k.strip()]
-            else:
-                return [k.strip() for k in content.split("\n") if k.strip()]
+            # Parse as CSV and/or one key per line ('#' starts a comment line)
+            keys = []
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                keys.extend(k.strip() for k in line.split(',') if k.strip())
+            return keys
         except Exception as e:
-            print(f"Error reading keys from {self.file_path}: {e}")
+            self.logger.error(f"Error reading keys from {self.file_path}: {e}")
             return []
 
     async def refresh_keys(self) -> List[str]:

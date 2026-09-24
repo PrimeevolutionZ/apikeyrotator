@@ -10,6 +10,7 @@ import threading
 from typing import Dict, Any, Optional
 from .base import RotatorMiddleware
 from .models import RequestInfo, ResponseInfo, ErrorInfo
+from ..utils.error_classifier import get_header, parse_retry_after
 
 
 class RateLimitMiddleware(RotatorMiddleware):
@@ -21,16 +22,19 @@ class RateLimitMiddleware(RotatorMiddleware):
         self,
         pause_on_limit: bool = True,
         max_tracked_keys: int = 1000,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        max_wait: float = 300.0
     ):
         """
         Args:
             pause_on_limit: Whether to wait until rate limit expires
             max_tracked_keys: Maximum number of tracked keys
             logger: Logger for output messages
+            max_wait: Upper bound (seconds) for a single pause
         """
         self.rate_limits: Dict[str, Dict[str, Any]] = {}
         self.pause_on_limit = pause_on_limit
+        self.max_wait = max(0.0, max_wait)
         self.max_tracked_keys = max(10, max_tracked_keys)
 
         self.logger = logger if logger else logging.getLogger(__name__)
@@ -77,67 +81,51 @@ class RateLimitMiddleware(RotatorMiddleware):
 
             self.logger.debug(f"Evicted {to_remove} oldest rate limit entries")
 
+    # Values below this are treated as "seconds until reset", larger values as UNIX timestamps
+    _EPOCH_THRESHOLD = 1_000_000_000
+
     def _get_header_nocase(self, headers: Dict[str, str], key: str) -> Optional[str]:
         """Helper to get header value ignoring case."""
-        if not headers:
+        return get_header(headers, key)
+
+    @staticmethod
+    def _parse_number(value: Optional[str]) -> Optional[float]:
+        if value is None:
             return None
-        # Direct lookup first (fastest)
-        if key in headers:
-            return headers[key]
-        # Case-insensitive lookup
-        key_lower = key.lower()
-        for k, v in headers.items():
-            if k.lower() == key_lower:
-                return v
-        return None
+        try:
+            # Some APIs send lists like "100, 100;w=60" - take the first value
+            return float(str(value).split(',')[0].split(';')[0].strip())
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def _to_reset_timestamp(cls, value: float, now: Optional[float] = None) -> float:
+        """Normalizes a reset value (delta seconds or UNIX timestamp) to a UNIX timestamp."""
+        if now is None:
+            now = time.time()
+        if value < cls._EPOCH_THRESHOLD:
+            return now + max(0.0, value)
+        return value
 
     def _extract_rate_limit_info(self, headers: Dict[str, str]) -> Dict[str, Any]:
         """Extract rate limit information from response headers."""
-        rate_limit_info = {}
+        rate_limit_info: Dict[str, Any] = {}
 
-        # Standard rate-limit headers
-        limit = self._get_header_nocase(headers, 'X-RateLimit-Limit')
-        if limit:
-            try:
-                rate_limit_info['limit'] = int(limit)
-            except (ValueError, TypeError):
-                pass
-
-        remaining = self._get_header_nocase(headers, 'X-RateLimit-Remaining')
-        if remaining:
-            try:
-                rate_limit_info['remaining'] = int(remaining)
-            except (ValueError, TypeError):
-                pass
-
-        reset = self._get_header_nocase(headers, 'X-RateLimit-Reset')
-        if reset:
-            try:
-                rate_limit_info['reset_time'] = int(reset)
-            except (ValueError, TypeError):
-                pass
-
-        # Alternative header names (no prefix)
-        if 'limit' not in rate_limit_info:
-            limit = self._get_header_nocase(headers, 'RateLimit-Limit')
-            if limit:
-                try:
+        for prefix in ('X-RateLimit-', 'RateLimit-'):
+            if 'limit' not in rate_limit_info:
+                limit = self._parse_number(self._get_header_nocase(headers, prefix + 'Limit'))
+                if limit is not None:
                     rate_limit_info['limit'] = int(limit)
-                except (ValueError, TypeError): pass
 
-        if 'remaining' not in rate_limit_info:
-            remaining = self._get_header_nocase(headers, 'RateLimit-Remaining')
-            if remaining:
-                try:
+            if 'remaining' not in rate_limit_info:
+                remaining = self._parse_number(self._get_header_nocase(headers, prefix + 'Remaining'))
+                if remaining is not None:
                     rate_limit_info['remaining'] = int(remaining)
-                except (ValueError, TypeError): pass
 
-        if 'reset_time' not in rate_limit_info:
-            reset = self._get_header_nocase(headers, 'RateLimit-Reset')
-            if reset:
-                try:
-                    rate_limit_info['reset_time'] = int(reset)
-                except (ValueError, TypeError): pass
+            if 'reset_time' not in rate_limit_info:
+                reset = self._parse_number(self._get_header_nocase(headers, prefix + 'Reset'))
+                if reset is not None:
+                    rate_limit_info['reset_time'] = self._to_reset_timestamp(reset)
 
         return rate_limit_info
 
@@ -173,8 +161,11 @@ class RateLimitMiddleware(RotatorMiddleware):
                 limit_info = self.rate_limits[key]
                 reset_time = limit_info.get('reset_time', 0)
 
-                if self.pause_on_limit and reset_time > time.time():
-                    wait_time = reset_time - time.time()
+                # Pause only when the quota is actually used up. The reset header is
+                # present on every response, so reset_time alone doesn't mean "blocked".
+                remaining = limit_info.get('remaining', 1)
+                if self.pause_on_limit and remaining <= 0 and reset_time > time.time():
+                    wait_time = min(reset_time - time.time(), self.max_wait)
                     jitter = random.uniform(0, wait_time * 0.1)
                     wait_time += jitter
 
@@ -197,27 +188,20 @@ class RateLimitMiddleware(RotatorMiddleware):
         if status_code == 429:
             key = error_info.request_info.key
 
-            # Try to extract Retry-After header
-            retry_after = self._get_header_nocase(headers, 'Retry-After')
+            # Retry-After (seconds or HTTP-date), then X-RateLimit-Reset, then default 60s
             reset_time = None
+            retry_after = parse_retry_after(headers)
+            if retry_after is not None:
+                reset_time = time.time() + retry_after
 
-            if retry_after:
-                try:
-                    reset_time = time.time() + int(retry_after)
-                except (ValueError, TypeError):
-                    pass
+            if reset_time is None:
+                reset_val = self._parse_number(self._get_header_nocase(headers, 'X-RateLimit-Reset'))
+                if reset_val is None:
+                    reset_val = self._parse_number(self._get_header_nocase(headers, 'RateLimit-Reset'))
+                if reset_val is not None:
+                    reset_time = self._to_reset_timestamp(reset_val)
 
-            # Fallback to X-RateLimit-Reset
-            if not reset_time:
-                reset_val = self._get_header_nocase(headers, 'X-RateLimit-Reset')
-                if reset_val:
-                    try:
-                        reset_time = int(reset_val)
-                    except (ValueError, TypeError):
-                        pass
-
-            # Default: wait 60 seconds
-            if not reset_time:
+            if reset_time is None:
                 reset_time = time.time() + 60
 
             with self._lock:

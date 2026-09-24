@@ -4,7 +4,6 @@ Health-Based rotation strategy
 
 import time
 import random
-import asyncio
 from typing import List, Dict, Optional
 from .base import BaseRotationStrategy, KeyMetrics
 
@@ -59,7 +58,11 @@ class HealthBasedStrategy(BaseRotationStrategy):
     ) -> str:
         """
         Selects a random healthy key.
-        FIXED #10: Staggered recovery instead of all-at-once.
+
+        Unhealthy keys are given a probe request once health_check_interval
+        seconds have passed since their last failure. If no key is healthy,
+        the key whose last failure is the oldest is probed (staggered recovery
+        instead of reviving all keys at once - avoids a thundering herd).
 
         Args:
             current_key_metrics: Current key metrics from rotator
@@ -68,43 +71,46 @@ class HealthBasedStrategy(BaseRotationStrategy):
             str: Random healthy key
 
         Raises:
-            Exception: If no healthy keys available
+            ValueError: If no keys are available
         """
-        # Use external metrics if provided
-        if current_key_metrics:
-            for key, metrics in current_key_metrics.items():
-                if key in self._key_metrics:
-                    self._key_metrics[key] = metrics
+        with self._lock:
+            keys = self._keys
+            if not keys:
+                raise ValueError("No keys available for rotation.")
 
-        # Find healthy keys or those ready for recheck
-        current_time = time.time()
-        healthy_keys = [
-            k for k, metrics in self._key_metrics.items()
-            if metrics.is_healthy or (
-                    current_time - metrics.last_used > self.health_check_interval
-            )
-        ]
+            ext = current_key_metrics or {}
+            own = self._key_metrics
+            now = time.time()
+            threshold = self.failure_threshold
+            interval = self.health_check_interval
 
-        if not healthy_keys:
-            # Instead of marking all as healthy at once, mark one random key
-            # This prevents thundering herd when all keys recover simultaneously
-            all_keys = list(self._key_metrics.keys())
-            if all_keys:
-                # Select random key for recovery
-                recovery_key = random.choice(all_keys)
-                self._key_metrics[recovery_key].is_healthy = True
-                healthy_keys = [recovery_key]
-                self.logger.info(f"Staggered recovery: marking {recovery_key[:4]}**** as healthy")
-            else:
-                raise Exception("No keys available for rotation.")
+            healthy_keys = []
+            oldest_key, oldest_failure = keys[0], float('inf')
+            for k in keys:
+                m = ext.get(k) or own.get(k)
+                if m is None:
+                    # No metrics yet: healthy
+                    healthy_keys.append(k)
+                    continue
+                if m.rate_limit_reset > now:
+                    continue
+                failures = m.consecutive_failures
+                # is_healthy=False without consecutive failures means the key was
+                # flagged explicitly (or by a low success rate) - respect that flag.
+                if failures < threshold and (m.is_healthy or failures > 0):
+                    healthy_keys.append(k)
+                elif m.last_failure > 0 and now - m.last_failure >= interval:
+                    # Ready for a recheck
+                    healthy_keys.append(k)
+                elif m.last_failure < oldest_failure:
+                    oldest_key, oldest_failure = k, m.last_failure
 
-        if not healthy_keys:
-            raise Exception("No keys available for rotation.")
+            if healthy_keys:
+                return random.choice(healthy_keys)
 
-        # Select random healthy key
-        key = random.choice(healthy_keys)
-        self._key_metrics[key].last_used = time.time()
-        return key
+            # Staggered recovery: probe the key that failed the longest time ago
+            self.logger.info(f"Staggered recovery: probing key {oldest_key[:4]}****")
+            return oldest_key
 
     def update_key_metrics(
             self,
@@ -122,7 +128,8 @@ class HealthBasedStrategy(BaseRotationStrategy):
             response_time: Execution time
             **kwargs: Additional parameters
         """
-        metrics = self._key_metrics.get(key)
+        with self._lock:
+            metrics = self._key_metrics.get(key)
         if not metrics:
             return
 

@@ -1,6 +1,6 @@
 import logging
 import inspect
-from typing import List, Optional, Callable, Any, Dict, Tuple, Union
+from typing import List, Optional, Callable, Any, Dict, Tuple
 
 from .core.rotator import BaseKeyRotator, APIKeyRotator, AsyncAPIKeyRotator
 from .core.exceptions import AllKeysExhaustedError, AllProvidersExhaustedError
@@ -63,13 +63,13 @@ class FallbackRouter:
                 self.logger.debug(f"Skipping route '{route.name}' (condition not met)")
                 continue
 
-            req_method, req_url, req_kwargs = method, url, kwargs
-            if route.request_transformer:
-                req_method, req_url, req_kwargs = route.request_transformer(method, url, kwargs)
-
             if not isinstance(route.rotator, APIKeyRotator):
                 self.logger.warning(f"Route '{route.name}' has async rotator but used in sync request()")
                 continue
+
+            req_method, req_url, req_kwargs = method, url, dict(kwargs)
+            if route.request_transformer:
+                req_method, req_url, req_kwargs = route.request_transformer(method, url, dict(kwargs))
 
             try:
                 self.logger.info(f"Routing request to provider: {route.name}")
@@ -92,6 +92,12 @@ class FallbackRouter:
     def post(self, url: str, **kwargs) -> Any:
         return self.request("POST", url, **kwargs)
 
+    def put(self, url: str, **kwargs) -> Any:
+        return self.request("PUT", url, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> Any:
+        return self.request("DELETE", url, **kwargs)
+
     async def request_async(self, method: str, url: str, **kwargs) -> Any:
         """
         Execute an asynchronous request, falling back through routes as needed.
@@ -101,17 +107,17 @@ class FallbackRouter:
                 self.logger.debug(f"Skipping route '{route.name}' (condition not met)")
                 continue
 
-            req_method, req_url, req_kwargs = method, url, kwargs
-            if route.request_transformer:
-                req_method, req_url, req_kwargs = route.request_transformer(method, url, kwargs)
-
             if not isinstance(route.rotator, AsyncAPIKeyRotator):
                 self.logger.warning(f"Route '{route.name}' has sync rotator but used in async request_async()")
                 continue
 
+            req_method, req_url, req_kwargs = method, url, dict(kwargs)
+            if route.request_transformer:
+                req_method, req_url, req_kwargs = route.request_transformer(method, url, dict(kwargs))
+
             try:
                 self.logger.info(f"Routing async request to provider: {route.name}")
-                return await route.rotator.request_async(req_method, req_url, **req_kwargs)
+                return await route.rotator.request(req_method, req_url, **req_kwargs)
             except AllKeysExhaustedError:
                 self.logger.warning(f"Provider '{route.name}' exhausted all keys. Moving to next route.")
                 if route.on_exhausted:
@@ -134,3 +140,9 @@ class FallbackRouter:
 
     async def post_async(self, url: str, **kwargs) -> Any:
         return await self.request_async("POST", url, **kwargs)
+
+    async def put_async(self, url: str, **kwargs) -> Any:
+        return await self.request_async("PUT", url, **kwargs)
+
+    async def delete_async(self, url: str, **kwargs) -> Any:
+        return await self.request_async("DELETE", url, **kwargs)

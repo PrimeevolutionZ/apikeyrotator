@@ -42,40 +42,50 @@ class LRURotationStrategy(BaseRotationStrategy):
         """
         Selects the least recently used healthy key.
 
+        Selection and marking the key as used happen atomically, so concurrent
+        callers never receive the same "least recently used" key.
+
         Args:
-            current_key_metrics: Current key metrics from rotator
-                                 If provided, used instead of internal
+            current_key_metrics: Current key metrics from rotator.
+                                 If provided, their last_used is taken into account.
 
         Returns:
             str: Least recently used healthy key
         """
-        # Use external metrics if provided
-        if current_key_metrics:
-            for key, metrics in current_key_metrics.items():
-                if key in self._key_metrics:
-                    self._key_metrics[key] = metrics
+        with self._lock:
+            if not self._keys:
+                raise ValueError("No keys available in rotation")
 
-        # Filter to healthy keys
-        healthy_keys = self._get_healthy_keys(current_key_metrics)
-        healthy_set = set(healthy_keys)
+            own_metrics = self._key_metrics
+            now = time.time()
+            recovery_timeout = self.recovery_timeout
+            available = self._key_available
+            ext_get = current_key_metrics.get if current_key_metrics else None
 
-        # Find LRU key among healthy keys
-        healthy_metrics = {
-            k: v for k, v in self._key_metrics.items() if k in healthy_set
-        }
+            # Single pass: least recently used among available keys,
+            # falling back to the least recently used key overall.
+            best_key = best_any = None
+            best_ts = best_any_ts = float('inf')
+            for k in self._keys:
+                own = own_metrics.get(k)
+                ts = own.last_used if own is not None else 0.0
+                ext = ext_get(k) if ext_get is not None else None
+                if ext is not None and ext.last_used > ts:
+                    ts = ext.last_used
+                if ts < best_any_ts:
+                    best_any, best_any_ts = k, ts
+                if ts < best_ts and (ext_get is None or available(ext, now, recovery_timeout)):
+                    best_key, best_ts = k, ts
+            lru_key = best_key if best_key is not None else best_any
 
-        if not healthy_metrics:
-            healthy_metrics = self._key_metrics
+            # Mark as used in internal state only - external metrics are owned
+            # (and updated) by the rotator itself.
+            own = self._key_metrics.get(lru_key)
+            if own is None:
+                own = self._key_metrics[lru_key] = KeyMetrics(lru_key)
+            own.last_used = time.time()
 
-        lru_key = min(
-            healthy_metrics.items(),
-            key=lambda x: x[1].last_used
-        )
-
-        # Update usage time
-        lru_key[1].last_used = time.time()
-
-        return lru_key[0]
+        return lru_key
 
     def update_keys(self, new_keys: List[str]) -> None:
         """Updates keys, adding metrics for new keys and removing stale ones."""

@@ -1,6 +1,5 @@
 """Factory for creating secret providers"""
 
-from typing import Union
 from .base import SecretProvider
 from .environment import EnvironmentSecretProvider
 from .file import FileSecretProvider

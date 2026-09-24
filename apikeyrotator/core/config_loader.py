@@ -1,7 +1,7 @@
 import os
 import json
 import yaml
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 import logging
 
 
@@ -126,7 +126,7 @@ class ConfigLoader:
         self.config.update(new_data)
         self.save_config()
         if self.logger:
-            self.logger.debug(f"Updated config with new data")
+            self.logger.debug("Updated config with new data")
 
     def clear(self):
         """Clears the current configuration."""

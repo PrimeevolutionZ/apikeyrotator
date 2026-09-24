@@ -33,12 +33,14 @@ class ResponseInfo:
             status_code: int,
             headers: Dict[str, str],
             content: Any,
-            request_info: RequestInfo
+            request_info: RequestInfo,
+            response_time: Optional[float] = None
     ):
         self.status_code = status_code
         self.headers = headers
         self.content = content
         self.request_info = request_info
+        self.response_time = response_time
 
 
 class ErrorInfo:

@@ -22,6 +22,7 @@ from .core.exceptions import (
     NoAPIKeysError,
     AllKeysExhaustedError,
     AllProvidersExhaustedError,
+    HTTPStatusError,
 )
 
 # Strategies
@@ -47,6 +48,7 @@ from .providers import (
     EnvironmentSecretProvider,
     FileSecretProvider,
     AWSSecretsManagerProvider,
+    GCPSecretManagerProvider,
 )
 
 # Middleware
@@ -75,7 +77,7 @@ from .utils import (
     async_retry_with_backoff,
 )
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 __author__ = "Prime Evolution"
 
 __all__ = [
@@ -86,6 +88,7 @@ __all__ = [
     "NoAPIKeysError",
     "AllKeysExhaustedError",
     "AllProvidersExhaustedError",
+    "HTTPStatusError",
     "parse_keys",
     "ConfigLoader",
 
@@ -106,6 +109,7 @@ __all__ = [
     "EnvironmentSecretProvider",
     "FileSecretProvider",
     "AWSSecretsManagerProvider",
+    "GCPSecretManagerProvider",
 
     # Middleware
     "RotatorMiddleware",

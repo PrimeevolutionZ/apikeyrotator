@@ -136,23 +136,9 @@ rotator = APIKeyRotator(
 # - Tracks limits per key
 ```
 
-#### RetryMiddleware
-
-Additional retry logic:
-
-```python
-from apikeyrotator.middleware import RetryMiddleware
-
-retry = RetryMiddleware(
-    max_retries=5,
-    backoff_factor=2.0
-)
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[retry]
-)
-```
+> **Note:** `RetryMiddleware` was removed in 0.6.1 — retries are built into the rotator
+> (`max_retries`, `base_delay`, `max_delay`). Rate-limited keys are skipped automatically
+> using `Retry-After`, so no extra middleware is needed.
 
 ### Custom Middleware
 

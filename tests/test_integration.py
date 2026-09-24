@@ -27,7 +27,6 @@ from apikeyrotator.middleware import (
     LoggingMiddleware,
     CachingMiddleware,
     RateLimitMiddleware,
-    RetryMiddleware,
 )
 
 # Check optional dependencies
@@ -248,38 +247,6 @@ class TestMiddlewareIntegration:
                 # Check rate limit was recorded
                 stats = rate_middleware.get_stats()
                 assert stats['tracked_keys'] >= 1
-
-    @pytest.mark.skipif(not HAS_REQUESTS, reason="requests not installed")
-    @pytest.mark.asyncio
-    async def test_retry_middleware(self):
-        """Test retry middleware handles failures."""
-        retry_middleware = RetryMiddleware(max_retries=3, backoff_factor=0.1)
-
-        async with AsyncAPIKeyRotator(
-            api_keys=['key1'],
-            middlewares=[retry_middleware],
-            load_env_file=False
-        ) as rotator:
-
-            call_count = 0
-
-            async def mock_request(*args, **kwargs):
-                nonlocal call_count
-                call_count += 1
-
-                if call_count < 2:
-                    raise aiohttp.ClientError("Connection error")
-
-                resp = AsyncMock()
-                resp.status = 200
-                resp.headers = {}
-                resp.release = AsyncMock()
-                return resp
-
-            with patch('aiohttp.ClientSession.request', side_effect=mock_request):
-                # Should succeed after retry
-                response = await rotator.get('http://example.com')
-                assert response.status == 200
 
     @pytest.mark.skipif(not HAS_REQUESTS, reason="requests not installed")
     def test_multiple_middlewares(self):
@@ -504,18 +471,20 @@ class TestConcurrentAccess:
         )
 
         def make_requests():
-            with patch('requests.Session.request') as mock_request:
-                mock_request.return_value = Mock(status_code=200, headers={}, content=b'')
-                for _ in range(10):
-                    rotator.get('http://example.com')
+            for _ in range(10):
+                rotator.get('http://example.com')
 
-        threads = [threading.Thread(target=make_requests) for _ in range(5)]
+        # Patch once for all threads: mock.patch is process-global and not
+        # thread-safe, so patching inside each thread leaks real requests.
+        with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = Mock(status_code=200, headers={}, content=b'')
+            threads = [threading.Thread(target=make_requests) for _ in range(5)]
 
-        for t in threads:
-            t.start()
+            for t in threads:
+                t.start()
 
-        for t in threads:
-            t.join()
+            for t in threads:
+                t.join()
 
         metrics = rotator.get_metrics()
         assert metrics['total_requests'] == 50

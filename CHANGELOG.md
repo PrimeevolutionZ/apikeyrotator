@@ -1,6 +1,44 @@
 # Changelog
 
 All notable changes to APIKeyRotator will be documented in this file.
+## [0.7.0] - 2026-09-24
+
+### Fixed
+- **Key pool destruction on client errors**: any 4xx (e.g. `404`, `400`, `422`) removed the key from rotation, so a wrong URL burned through the whole pool. Now only `401`/`403` remove a key; other client errors are returned to the caller without retries.
+- **`ErrorClassifier.should_remove_key()` / `get_retry_delay()`** relied on the truthiness of `requests.Response`, which is `False` for error codes — they never worked with real responses.
+- **Async `FallbackRouter.request_async()`** called a non-existent `rotator.request_async()` and always failed.
+- **`rotation_strategy="weighted"`** always raised `ValueError`; weights can now be passed via `rotation_strategy_kwargs={"weights": {...}}` (default: equal weights).
+- **Async caching**: responses were cached with `content=None`, so cache hits returned an empty body. The body is now read when middlewares are active.
+- **Caching key collisions**: `params=` were not part of the cache key (`?q=a` and `?q=b` shared one entry).
+- **`RateLimitMiddleware`** paused every request until the window reset even with quota remaining; `RateLimit-Reset` (delta seconds) was treated as a UNIX timestamp; fractional / HTTP-date `Retry-After` was ignored.
+- **Middleware `on_error` hooks** were never invoked by the rotators.
+- **Response time metrics** included all previous retries and backoff sleeps.
+- **Unhealthy keys were excluded forever**: after 3 failures a key was never selected again (unless all keys failed). Keys are now probed again after `recovery_timeout` (60s). An active rate limit no longer flips `is_healthy`.
+- **`HealthBasedStrategy`** ignored its own `failure_threshold` when used from the rotator.
+- **Thread safety**: LRU could hand the same key to concurrent callers; user-agent/proxy cycling was not synchronised; `LoggingMiddleware` rate limiter counters were racy.
+- **Prometheus exporter** emitted duplicate `# HELP`/`# TYPE` lines (invalid format), did not escape label values and exposed 8 key characters (now 4, masked).
+- **Secret providers**: `secret_provider=` was accepted but never used. AWS/GCP providers swallowed errors so retries never happened. File provider used `print()` and mis-parsed mixed CSV/newline files.
+- **Tests**: `test_middleware.py` / `test_providers.py` were truncated and the suite failed to import (`RetryMiddleware`); the concurrency test leaked real HTTP requests.
+
+### Changed (load resilience & performance)
+- On `429` the rotator marks the key as rate-limited (using `Retry-After`) and switches to the next available key **immediately**; it waits only when all keys are limited — until the earliest one frees up.
+- Backoff and rate-limit waits are capped by the new `max_delay` (60s).
+- Failed responses are closed/released so connections return to the pool; streaming responses (`stream=True`) are no longer consumed.
+- Key selection is O(1) in the common case for round-robin / random / weighted (1000 keys: ~7.9k → ~1.1M selections/s). Metrics dict is copy-on-write instead of being copied per request.
+- Endpoint metrics drop query strings and are bounded (`RotatorMetrics(max_endpoints=1000)`) — no unbounded memory growth.
+- `CachingMiddleware` tracks its size incrementally (was O(n) per insert).
+- Per-request log messages moved from INFO to DEBUG.
+- Duplicate API keys are removed on load.
+
+### Added
+- `max_delay`, `pool_size`, `recovery_timeout` rotator parameters.
+- `refresh_keys_from_provider()` / `refresh_keys_from_provider_sync()`; keys are loaded from `secret_provider` when `api_keys` is not given. Changing keys preserves metrics of kept keys.
+- `AllKeysExhaustedError.last_response` / `.last_exception`; new `HTTPStatusError`.
+- `patch()` / `head()` methods, `close()` and context-manager support for the sync rotator, `close()` for the async one.
+- `ResponseInfo.response_time`, `CachingMiddleware.clear()`, `hit_rate` in cache stats, `RateLimitMiddleware(max_wait=...)`.
+- **Benchmark suite** `benchmarks/bench_core.py` with baseline save/compare (see `benchmarks/README.md`).
+- Regression tests (`tests/test_regressions.py`) and full middleware/provider test suites.
+
 ## [0.6.1] - 2026-06-19
 
 ### Added

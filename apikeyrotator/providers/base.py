@@ -2,7 +2,36 @@
 Base protocol for secret providers
 """
 
-from typing import List, Protocol
+import json
+from typing import Any, List, Protocol
+
+
+def _split_csv(value: str) -> List[str]:
+    return [k.strip() for k in value.replace('\n', ',').split(',') if k.strip()]
+
+
+def parse_secret_payload(secret: str) -> List[str]:
+    """
+    Parses a secret payload into a list of keys.
+
+    Supported formats:
+    - JSON array: ["key1", "key2"]
+    - JSON object: {"keys": [...]} / {"api_keys": [...]} / {"name": "key", ...}
+    - JSON string: "key1,key2"
+    - Plain string: key1,key2 (commas and/or newlines)
+    """
+    try:
+        data: Any = json.loads(secret)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _split_csv(secret or "")
+
+    if isinstance(data, dict):
+        data = data.get('keys') or data.get('api_keys') or list(data.values())
+    if isinstance(data, list):
+        return [str(k).strip() for k in data if k is not None and str(k).strip()]
+    if isinstance(data, str):
+        return _split_csv(data)
+    return []
 
 
 class SecretProvider(Protocol):

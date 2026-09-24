@@ -2,7 +2,10 @@
 Weighted rotation strategy
 """
 
+import bisect
+import itertools
 import random
+import time
 from typing import Dict, List, Optional
 from .base import BaseRotationStrategy, KeyMetrics
 
@@ -21,6 +24,8 @@ class WeightedRotationStrategy(BaseRotationStrategy):
         >>> strategy.get_next_key()
     """
 
+    _PROBES = 4
+
     def __init__(self, keys: Dict[str, float]):
         """
         Initializes Weighted strategy.
@@ -34,9 +39,15 @@ class WeightedRotationStrategy(BaseRotationStrategy):
             >>> # key1 will be selected twice as often as key2
         """
         super().__init__(keys)
-        self._weights = keys
+        for key, weight in keys.items():
+            if not isinstance(weight, (int, float)) or weight < 0:
+                raise ValueError(f"Weight for key {key[:4]}**** must be a non-negative number")
+        if sum(keys.values()) <= 0:
+            raise ValueError("At least one key must have a positive weight")
+        self._weights = dict(keys)
         self._keys_list = list(keys.keys())
         self._weights_list = list(keys.values())
+        self._rebuild_cumulative()
 
     def get_next_key(
             self,
@@ -51,23 +62,41 @@ class WeightedRotationStrategy(BaseRotationStrategy):
         Returns:
             str: Key selected according to weight coefficients
         """
-        healthy_keys = self._get_healthy_keys(current_key_metrics)
-        healthy_set = set(healthy_keys)
+        with self._lock:
+            keys_list = self._keys_list
+            cum_weights = self._cum_weights
+            if not keys_list:
+                raise ValueError("No keys available in rotation")
+            total = cum_weights[-1] if cum_weights else 0.0
 
-        # Filter weights to only include healthy keys
-        filtered_keys = [k for k in self._keys_list if k in healthy_set]
-        filtered_weights = [w for k, w in zip(self._keys_list, self._weights_list) if k in healthy_set]
+        if total > 0:
+            # Fast path: weighted pick via bisect over precomputed cumulative
+            # weights (O(log n)); re-draw a few times if the key is unavailable.
+            now = time.time()
+            recovery_timeout = self.recovery_timeout
+            for _ in range(self._PROBES):
+                idx = bisect.bisect_right(cum_weights, random.random() * total)
+                key = keys_list[min(idx, len(keys_list) - 1)]
+                if not current_key_metrics or self._key_available(
+                        current_key_metrics.get(key), now, recovery_timeout):
+                    return key
 
-        if not filtered_keys:
+        # Slow path: filter to healthy keys and draw among them
+        healthy_set = set(self._get_healthy_keys(current_key_metrics))
+        with self._lock:
+            pairs = list(zip(self._keys_list, self._weights_list))
+        filtered = [(k, w) for k, w in pairs if k in healthy_set]
+        if not filtered or sum(w for _, w in filtered) <= 0:
             # Fallback: use all keys if no healthy ones
-            filtered_keys = self._keys_list
-            filtered_weights = self._weights_list
+            filtered = pairs
+        filtered_keys = [k for k, _ in filtered]
+        filtered_weights = [w for _, w in filtered]
+        if sum(filtered_weights) <= 0:
+            return random.choice(filtered_keys)
+        return random.choices(filtered_keys, weights=filtered_weights, k=1)[0]
 
-        return random.choices(
-            filtered_keys,
-            weights=filtered_weights,
-            k=1
-        )[0]
+    def _rebuild_cumulative(self) -> None:
+        self._cum_weights = list(itertools.accumulate(self._weights_list))
 
     def update_keys(self, new_keys: List[str]) -> None:
         """Updates available keys, preserving weights for existing keys."""
@@ -82,3 +111,4 @@ class WeightedRotationStrategy(BaseRotationStrategy):
                     self._keys_list.append(k)
                     self._weights_list.append(1.0)
                     self._weights[k] = 1.0
+            self._rebuild_cumulative()

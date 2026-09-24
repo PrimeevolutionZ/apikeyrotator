@@ -2,6 +2,7 @@
 Middleware for logging
 """
 import logging
+import threading
 import time
 from typing import Optional
 from .base import RotatorMiddleware
@@ -45,24 +46,28 @@ class LoggingMiddleware(RotatorMiddleware):
         self._last_log_reset = time.time()
         self._log_count = 0
         self._dropped_logs = 0
+        self._counter_lock = threading.Lock()
 
     def _should_log(self) -> bool:
-        current_time = time.time()
-        if current_time - self._last_log_reset >= 1.0:
-            if self._dropped_logs > 0:
-                self.logger.warning(
-                    f"⚠️ Dropped {self._dropped_logs} log messages due to rate limiting"
-                )
-            self._last_log_reset = current_time
-            self._log_count = 0
-            self._dropped_logs = 0
+        dropped = 0
+        with self._counter_lock:
+            current_time = time.time()
+            if current_time - self._last_log_reset >= 1.0:
+                dropped = self._dropped_logs
+                self._last_log_reset = current_time
+                self._log_count = 0
+                self._dropped_logs = 0
 
-        if self._log_count >= self.max_logs_per_second:
-            self._dropped_logs += 1
-            return False
+            if self._log_count >= self.max_logs_per_second:
+                self._dropped_logs += 1
+                allowed = False
+            else:
+                self._log_count += 1
+                allowed = True
 
-        self._log_count += 1
-        return True
+        if dropped > 0:
+            self.logger.warning(f"⚠️ Dropped {dropped} log messages due to rate limiting")
+        return allowed
 
     def _mask_key(self, key: str) -> str:
         if len(key) <= self.max_key_chars:
@@ -121,8 +126,9 @@ class LoggingMiddleware(RotatorMiddleware):
             masked_key = self._mask_key(response_info.request_info.key)
             message += f" (key: {masked_key})"
 
-        if self.log_response_time and hasattr(response_info, 'response_time'):
-            message += f" ({response_info.response_time:.3f}s)"
+        response_time = getattr(response_info, 'response_time', None)
+        if self.log_response_time and response_time is not None:
+            message += f" ({response_time:.3f}s)"
 
         self.logger.log(log_level, message)
 

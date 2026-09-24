@@ -21,7 +21,18 @@ class RotatorMetrics:
     Note: Key metrics are now stored in BaseKeyRotator._key_metrics
     """
 
-    def __init__(self):
+    #: Label used for endpoints beyond max_endpoints
+    OVERFLOW_ENDPOINT = "__other__"
+
+    def __init__(self, max_endpoints: int = 1000):
+        """
+        Args:
+            max_endpoints: Maximum number of distinct endpoints tracked individually.
+                           Further endpoints are aggregated under OVERFLOW_ENDPOINT,
+                           so memory stays bounded under high-cardinality traffic.
+        """
+        self.max_endpoints = max(1, max_endpoints)
+
         # Statistics by endpoint
         self.endpoint_stats: Dict[str, EndpointStats] = defaultdict(EndpointStats)
 
@@ -63,7 +74,10 @@ class RotatorMetrics:
 
         # Endpoint statistics (separate lock to minimize contention)
         with self._endpoint_lock:
-            self.endpoint_stats[endpoint].update(success, response_time)
+            if endpoint not in self.endpoint_stats and len(self.endpoint_stats) >= self.max_endpoints:
+                endpoint = self.OVERFLOW_ENDPOINT
+            stats = self.endpoint_stats[endpoint]
+        stats.update(success, response_time)
 
     def get_metrics(self) -> Dict[str, Any]:
         """

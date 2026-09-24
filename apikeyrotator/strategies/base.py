@@ -49,8 +49,11 @@ class KeyMetrics:
         self.rate_limit_reset = 0.0
         self.requests_remaining = float('inf')
 
-        # NEW: Parameter for EWMA
+        # Parameter for EWMA
         self._ewma_alpha = max(0.01, min(1.0, ewma_alpha))
+
+        # Number of samples used for avg_response_time
+        self._response_samples = 0
 
         # Thread-safety
         self._lock = threading.RLock()
@@ -119,11 +122,13 @@ class KeyMetrics:
                 # FIXED: Correct EWMA formula for failure
                 self.success_rate = (1 - self._ewma_alpha) * self.success_rate + self._ewma_alpha * 0.0
 
-            # Update average response time (simple moving average)
-            if self.total_requests > 0 and response_time > 0:
-                self.avg_response_time = (
-                    self.avg_response_time * (self.total_requests - 1) + response_time
-                ) / self.total_requests
+            # Update average response time (cumulative average over timed samples only,
+            # so requests without timing information don't drag the average down)
+            if response_time > 0:
+                self._response_samples += 1
+                self.avg_response_time += (
+                    response_time - self.avg_response_time
+                ) / self._response_samples
 
             # Rate-limit information
             if is_rate_limited:
@@ -139,15 +144,55 @@ class KeyMetrics:
             # Key is considered unhealthy if:
             # - 3+ consecutive failures
             # - Success rate < 0.3
-            # - Rate limit active and not yet expired
+            # An active rate limit is tracked separately (rate_limit_reset) and is
+            # checked by is_available(); it must not flip is_healthy, otherwise the
+            # key would stay sidelined long after its rate limit window expired.
             if self.consecutive_failures >= 3:
                 self.is_healthy = False
             elif self.success_rate < 0.3 and self.total_requests > 10:
                 self.is_healthy = False
-            elif self.rate_limit_reset > time.time():
-                self.is_healthy = False
             else:
                 self.is_healthy = True
+
+    def mark_rate_limited(self, until: float) -> None:
+        """
+        Marks the key as rate limited until the given UNIX timestamp.
+
+        Args:
+            until: UNIX timestamp when the rate limit expires
+        """
+        with self._lock:
+            if until > self.rate_limit_reset:
+                self.rate_limit_reset = until
+            self.requests_remaining = 0
+
+    def is_available(self, now: Optional[float] = None, recovery_timeout: Optional[float] = None) -> bool:
+        """
+        Whether the key can be used right now.
+
+        A key is available if it is not rate limited and is healthy. An unhealthy
+        key becomes available again for a probe request once ``recovery_timeout``
+        seconds have passed since its last failure (half-open behaviour), so that
+        a transient outage doesn't exclude a key from rotation forever.
+
+        Args:
+            now: Current time (defaults to time.time())
+            recovery_timeout: Seconds after the last failure when an unhealthy key
+                              may be retried. None disables automatic recovery.
+        """
+        # Hot path (called for every key on every selection): plain attribute reads
+        # are atomic in CPython, so no lock is needed for this read-only check.
+        if now is None:
+            now = time.time()
+        if self.rate_limit_reset > now:
+            return False
+        if self.is_healthy:
+            return True
+        return (
+            recovery_timeout is not None
+            and self.last_failure > 0
+            and now - self.last_failure >= recovery_timeout
+        )
 
     def get_score(self) -> float:
         """
@@ -192,7 +237,13 @@ class KeyMetrics:
 class BaseRotationStrategy(ABC):
     """
     Base abstract class for all rotation strategies.
+
+    Attributes:
+        recovery_timeout: Seconds after the last failure when an unhealthy key is
+                          given another chance (probe). Set to None to disable.
     """
+
+    recovery_timeout: Optional[float] = 60.0
 
     def __init__(self, keys: Union[List[str], Dict[str, float]]):
         """
@@ -216,7 +267,6 @@ class BaseRotationStrategy(ABC):
         # Thread-safety for strategies
         self._lock = threading.RLock()
 
-        # Исправлено: инициализация логгера
         self.logger = logging.getLogger(__name__)
 
     @abstractmethod
@@ -283,21 +333,21 @@ class BaseRotationStrategy(ABC):
             List[str]: List of healthy keys
         """
         with self._lock:
-            if current_key_metrics is None:
-                return self._keys.copy()
+            keys = self._keys.copy()
 
-            healthy = []
-            for key in self._keys:
-                if key in current_key_metrics:
-                    metrics = current_key_metrics[key]
-                    # Key is healthy if:
-                    # - is_healthy = True
-                    # - rate limit expired
-                    if metrics.is_healthy and metrics.rate_limit_reset <= time.time():
-                        healthy.append(key)
-                else:
-                    # If no metrics, consider key healthy
-                    healthy.append(key)
+        if current_key_metrics is None:
+            return keys
 
-            # If no healthy keys, return all
-            return healthy if healthy else self._keys.copy()
+        now = time.time()
+        recovery_timeout = self.recovery_timeout
+        get = current_key_metrics.get
+        available = self._key_available
+        healthy = [key for key in keys if available(get(key), now, recovery_timeout)]
+
+        # If no healthy keys, return all
+        return healthy if healthy else keys
+
+    @staticmethod
+    def _key_available(metrics: Optional[KeyMetrics], now: float, recovery_timeout: Optional[float]) -> bool:
+        """Availability check that treats keys without metrics as available."""
+        return metrics is None or metrics.is_available(now, recovery_timeout)

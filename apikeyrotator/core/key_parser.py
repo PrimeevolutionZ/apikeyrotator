@@ -21,6 +21,14 @@ def _setup_default_logger():
     return logger
 
 
+def _dedupe(keys: List[str], logger: logging.Logger) -> List[str]:
+    """Removes duplicate keys while preserving order."""
+    unique = list(dict.fromkeys(keys))
+    if len(unique) != len(keys):
+        logger.warning(f"⚠️ Removed {len(keys) - len(unique)} duplicate API key(s)")
+    return unique
+
+
 def parse_keys(
         api_keys: Optional[Union[List[str], str]] = None,
         env_var: str = "API_KEYS",
@@ -69,9 +77,9 @@ def parse_keys(
         if isinstance(api_keys, str):
             # Parsing comma-separated string
             keys = [k.strip() for k in api_keys.split(",") if k.strip()]
-        elif isinstance(api_keys, list):
+        elif isinstance(api_keys, (list, tuple)):
             # Cleaning list from empty strings and spaces
-            keys = [k.strip() for k in api_keys if k and k.strip()]
+            keys = [k.strip() for k in api_keys if isinstance(k, str) and k.strip()]
         else:
             logger.error("❌ API keys must be a list or comma-separated string.")
             raise NoAPIKeysError("❌ API keys must be a list or comma-separated string")
@@ -80,6 +88,7 @@ def parse_keys(
             logger.error("❌ No API keys provided in the api_keys parameter.")
             raise NoAPIKeysError("❌ No API keys provided in the api_keys parameter")
 
+        keys = _dedupe(keys, logger)
         logger.debug(f"✅ Parsed {len(keys)} keys from api_keys parameter")
         return keys
 
@@ -111,12 +120,12 @@ def parse_keys(
     if not keys:
         error_msg = (
             f"❌ No valid API keys found in ${env_var}.\n"
-            f"   Format should be: key1,key2,key3\n"
-            f"   Current value: '{keys_str}'"
+            f"   Format should be: key1,key2,key3"
         )
         logger.error(error_msg)
         raise NoAPIKeysError(error_msg)
 
+    keys = _dedupe(keys, logger)
     logger.debug(f"✅ Parsed {len(keys)} keys from environment variable ${env_var}")
     return keys
 
