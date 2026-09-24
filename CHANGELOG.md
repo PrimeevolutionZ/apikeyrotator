@@ -2,7 +2,10 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
-## [Unreleased]
+## [0.9.0] - 2026-09-24
+
+Safety for requests with side effects (payments, orders, messages), one response type for
+all HTTP clients, and fixes found by running the usage examples against a live API.
 
 ### Added
 - **`unified_response=True`**: every rotator and HTTP backend (requests, httpx, aiohttp; sync and async) returns the same `UnifiedResponse` - `status_code`, case-insensitive `headers` (with `get_list()` for repeated headers), `content` / `text` / `json()` without `await`, `ok`, `reason`, `url`, `elapsed`, `raise_for_status()` and the client's own object as `native`. The body is read and the connection returned to the pool; `AllKeysExhaustedError.last_response`, cache hits and `should_retry_callback` use the same object. About 2-3 µs per request; off by default.

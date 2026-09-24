@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 0.8.x | Yes (security fixes) |
+| 0.9.x | Yes (security fixes) |
+| 0.8.x | Upgrade recommended (0.9.0 closes duplicate-execution risks for POST/PATCH) |
 | 0.7.x | Upgrade recommended (last version supporting Python < 3.12) |
 | < 0.7 | No, please upgrade (0.6.x removes working keys on 4xx responses) |
 
@@ -184,4 +185,4 @@ Security advisories) to be notified.
 
 ---
 
-**Last updated:** September 2026 · **Version:** 0.8.2
+**Last updated:** September 2026 · **Version:** 0.9.0

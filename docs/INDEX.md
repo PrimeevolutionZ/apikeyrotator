@@ -502,6 +502,12 @@ Recommended reading order:
 
 ---
 
+## What's New in 0.9.0
+
+- POST/PATCH are never executed twice by the rotator: idempotent retries keep the same API key, `FallbackRouter` doesn't resend maybe-executed requests, `auto_idempotency_key=True`, `AllKeysExhaustedError.possibly_processed`
+- `unified_response=True`: the same response object for requests, httpx and aiohttp, sync and async
+- Fixing a wrong auth header no longer removes keys; key masks show the last 4 characters of long keys
+
 ## What's New in 0.8.2
 
 - `auth=` to choose how the key is sent (`"bearer"`, `"x-api-key"`, any header/template)
