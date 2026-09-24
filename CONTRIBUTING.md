@@ -9,6 +9,7 @@ documentation improvements are all welcome.
 - [Development Setup](#development-setup)
 - [How to Contribute](#how-to-contribute)
 - [Pull Request Process](#pull-request-process)
+- [Architecture](#architecture)
 - [Coding Standards](#coding-standards)
 - [Testing Guidelines](#testing-guidelines)
 - [Performance Changes](#performance-changes)
@@ -121,6 +122,35 @@ rotator = APIKeyRotator(api_keys=[...], new_option=True)
 6. **Review**: address comments; keep the branch up to date with
    `git fetch upstream && git merge upstream/master` (or rebase if you prefer).
 
+## Architecture
+
+The rotators are thin facades over small components in `apikeyrotator/core/`:
+
+| Module | Component | Responsibility |
+|---|---|---|
+| `rotator.py` | `APIKeyRotator`, `AsyncAPIKeyRotator` | Public API; assembles the components; *drives* the request loop (blocking / asyncio I/O) |
+| `engine.py` | `RequestEngine` | The request loop, written once for both rotators (see below) |
+| `keys.py` | `KeyPool` | Active keys, per-key metrics, rotation strategy, key removal |
+| `policy.py` | `RetryPolicy` | Attempts, backoff, timeouts and deadline, idempotency rules |
+| `limits.py` | `RateLimiter` | Token buckets, 429 / `X-RateLimit-*` handling |
+| `breakers.py` | `BreakerRegistry` | Per-host circuit breakers |
+| `shared_state.py` | `StateSync` | Sync with a `StateBackend` (Redis), fail-open |
+| `request_builder.py` | `RequestBuilder` | Auth header, custom headers/cookies, user agent and proxy rotation |
+| `middleware_chain.py` | `MiddlewareChain` | Runs middleware hooks in list order |
+| `transport.py` | `*Transport` | HTTP clients (requests, aiohttp, httpx) behind one interface |
+
+**The request engine is sans-IO.** `RequestEngine.run()` is a generator: it makes every
+decision and *yields* the I/O it needs as effects (`SEND`, `SLEEP`, `READ`, `RELEASE`,
+middleware hooks, blocking state-backend `CALL`s) and finishes with `DONE`/`SHORT`. The sync
+rotator performs the effects with blocking calls, the async rotator awaits them. So:
+
+- a new request-level feature is implemented **once** in `engine.py` (plus a component if
+  it has state) and works in both rotators;
+- the engine can be tested without any HTTP client by sending responses into the generator
+  (see `tests/test_core_components.py`);
+- a new public constructor argument goes to the component it configures; expose it on the
+  rotator with `_Delegate` so that changing the attribute later reaches the component.
+
 ## Coding Standards
 
 - **Style**: `ruff check .` must pass (rules configured in `pyproject.toml`: pyflakes,
@@ -145,7 +175,8 @@ rotator = APIKeyRotator(api_keys=[...], new_option=True)
 
 - Tests live in `tests/`, named `test_<topic>.py`; no real network access.
 - Sync requests: patch `requests.Session.request` or use the `requests_mock` fixture.
-- Async requests: patch `aiohttp.ClientSession.request` or use `aioresponses`.
+- Async requests: patch `aiohttp.ClientSession.request` (`aioresponses` does not support
+  aiohttp 3.14+).
 - httpx backend: `http_client_kwargs={"transport": httpx.MockTransport(handler)}`.
 - Time-dependent logic (backoff, rate limits, circuit breaker, deadlines): use the
   `virtual_clock` fixture from `tests/conftest.py` - sleeps are instant, the clock advances.
@@ -167,17 +198,19 @@ def test_switches_key_on_429(virtual_clock):
 ```
 
 ```python
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from aioresponses import aioresponses
 from apikeyrotator import AsyncAPIKeyRotator
 
 @pytest.mark.asyncio
 async def test_async_get():
-    with aioresponses() as mocked:
-        mocked.get("https://api.example.com/data", payload={"ok": True})
-        async with AsyncAPIKeyRotator(api_keys=["k1"], load_env_file=False) as rotator:
-            response = await rotator.get("https://api.example.com/data")
-            assert await response.json() == {"ok": True}
+    response = AsyncMock(status=200, headers={})
+    response.json = AsyncMock(return_value={"ok": True})
+    async with AsyncAPIKeyRotator(api_keys=["k1"], load_env_file=False) as rotator:
+        with patch("aiohttp.ClientSession.request", AsyncMock(return_value=response)):
+            result = await rotator.get("https://api.example.com/data")
+            assert await result.json() == {"ok": True}
 ```
 
 ```bash

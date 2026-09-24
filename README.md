@@ -534,10 +534,12 @@ Measured with the bundled benchmark (`python benchmarks/bench_core.py`, Python 3
 | Key selection | ~1 µs (round-robin / random / weighted, 10 or 1000 keys) |
 | Memory | ~230 bytes per key, no growth under sustained load |
 | `import apikeyrotator` | 69 ms, 13.8 MB |
-| Dead host + circuit breaker | 0.02 upstream calls per request instead of 3 |
+| Dead host + circuit breaker | 0.01 upstream calls per request instead of 3 |
 
-Every PR is benchmarked against its base branch in CI.
-**[📊 Benchmark docs and full results →](benchmarks/README.md)**
+Every PR is benchmarked against its base branch in CI, and every change on `master` is
+published: **[latest results](benchmarks/RESULTS.md)** ·
+**[history charts](https://primeevolutionz.github.io/apikeyrotator/bench/)** ·
+[benchmark docs](benchmarks/README.md)
 
 ## 🔒 Security
 

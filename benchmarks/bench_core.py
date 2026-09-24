@@ -19,6 +19,7 @@ Usage:
     python benchmarks/bench_core.py --save base.json    # save results
     python benchmarks/bench_core.py --compare base.json # compare with saved results
                                                         # (exit code 1 on regression)
+    python benchmarks/bench_core.py --markdown out.md   # Markdown report (RESULTS.md)
 
 All scenarios are deterministic (fixed random seed); overhead numbers still
 depend on the machine, so compare results produced on the same machine.
@@ -200,14 +201,18 @@ class SleepRecorder:
     Virtual clock: replaces time.sleep / asyncio.sleep so waits return instantly,
     records the requested wait time and advances time.time() by the same amount,
     so rate-limit windows (Retry-After) expire exactly as they would in real time.
+
+    time.time() starts at a fixed, minute-aligned epoch and moves only when the
+    code sleeps - results don't depend on when (or how fast) the scenario runs.
     """
+
+    EPOCH = 1_800_000_000.0  # multiple of 60: quota windows start aligned
 
     def __init__(self):
         self.total = 0.0
         self.count = 0
         self._lock = threading.Lock()
         self._real_async_sleep = asyncio.sleep
-        self._real_time = time.time
 
     def _advance(self, seconds) -> None:
         with self._lock:
@@ -215,7 +220,7 @@ class SleepRecorder:
             self.count += 1
 
     def now(self) -> float:
-        return self._real_time() + self.total
+        return self.EPOCH + self.total
 
     def sync(self, seconds):
         self._advance(seconds)
@@ -884,11 +889,12 @@ def _print_rows(headers: list[str], rows: list[list[str]]) -> None:
                         for i, (x, w) in enumerate(zip(row, widths))))
 
 
-def print_table(results: dict[str, Any]) -> None:
+def _tables(results: dict[str, Any]) -> list[tuple[list[str], list[list[str]]]]:
+    """(headers, rows) of the performance table and the resources table."""
     perf = {k: v for k, v in results.items() if v.get("group") != "resources"}
     res = {k: v for k, v in results.items() if v.get("group") == "resources"}
 
-    tables = [
+    specs = [
         (perf, ["ops_per_sec", "p50_us", "p99_us", "cpu_us_per_op", "success_rate",
                 "upstream_calls_per_req", "sleep_s_per_1k_req", "keys_left"],
          ["scenario", "ops/s", "p50 µs", "p99 µs", "CPU µs/op", "success", "calls/req", "sleep s/1k", "keys"]),
@@ -896,20 +902,73 @@ def print_table(results: dict[str, Any]) -> None:
                "import_ms", "import_rss_mb"],
          ["scenario", "B/key", "growth B/1k req", "peak KB", "alloc KB/req", "import ms", "import MB"]),
     ]
-    first = True
-    for subset, columns, headers in tables:
+    tables = []
+    for subset, columns, headers in specs:
         if not subset:
             continue
-        if not first:
-            print()
-        first = False
         rows = []
         for name, r in subset.items():
             if "error" in r:
                 rows.append([name, "ERROR: " + r["error"]] + [""] * (len(headers) - 2))
                 continue
             rows.append([name] + [_fmt(r[c]) if c in r else "-" for c in columns])
+        tables.append((headers, rows))
+    return tables
+
+
+def print_table(results: dict[str, Any]) -> None:
+    for i, (headers, rows) in enumerate(_tables(results)):
+        if i:
+            print()
         _print_rows(headers, rows)
+
+
+def markdown_report(results: dict[str, Any], env: dict[str, Any], settings: dict[str, Any]) -> str:
+    """Results as Markdown (published in benchmarks/RESULTS.md and CI job summaries)."""
+    lines = [
+        f"apikeyrotator **{env['apikeyrotator_version']}** · {env['implementation']} {env['python']} · "
+        f"{env['platform']} · {env['cpu_count']} CPUs · {env['timestamp']} · "
+        f"`-n {settings['requests']} -r {settings['repeat']}`",
+        "",
+    ]
+    for headers, rows in _tables(results):
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("|" + "|".join(["---"] + ["---:"] * (len(headers) - 1)) + "|")
+        for row in rows:
+            lines.append("| " + " | ".join([f"`{row[0]}`"] + [str(x) for x in row[1:]]) + " |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# Metrics published as history charts (github-action-benchmark "custom" format)
+_EXPORT_BIGGER = {"ops_per_sec": "ops/s"}
+_EXPORT_SMALLER = {
+    "p50_us": "µs", "upstream_calls_per_req": "calls/req", "sleep_s_per_1k_req": "s per 1k req",
+    "mem_bytes_per_key": "B/key", "mem_growth_bytes_per_1k_req": "B per 1k req",
+    "alloc_kb_per_req": "KB/req", "import_ms": "ms", "import_rss_mb": "MB",
+}
+
+
+def github_benchmark_entries(results: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    """(bigger-is-better, smaller-is-better) entries for benchmark-action/github-action-benchmark."""
+    bigger: list[dict] = []
+    smaller: list[dict] = []
+    for name, r in results.items():
+        if "error" in r:
+            continue
+        resources = r.get("group") == "resources"
+        for metric, unit in _EXPORT_BIGGER.items():
+            if metric in r and not resources:
+                bigger.append({"name": f"{name} · {metric}", "unit": unit, "value": r[metric],
+                               "extra": r.get("description", "")})
+        for metric, unit in _EXPORT_SMALLER.items():
+            # p50 only where latency is the point (overhead / e2e), not for simulated failures
+            if metric == "p50_us" and r.get("group") not in ("overhead", "e2e"):
+                continue
+            if metric in r:
+                smaller.append({"name": f"{name} · {metric}", "unit": unit, "value": r[metric],
+                                "extra": r.get("description", "")})
+    return bigger, smaller
 
 
 def compare(current: dict[str, Any], baseline: dict[str, Any], threshold: float,
@@ -974,6 +1033,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="which metrics count as regressions for --compare (default: all)")
     parser.add_argument("--scenario-timeout", type=float, default=None, metavar="SEC",
                         help="abort a scenario after SEC seconds and report it as an error")
+    parser.add_argument("--markdown", metavar="FILE", help="write the results as a Markdown report")
+    parser.add_argument("--export-github", metavar="PREFIX",
+                        help="write PREFIX-bigger.json / PREFIX-smaller.json for github-action-benchmark")
     parser.add_argument("--list", action="store_true", help="list scenarios and exit")
     args = parser.parse_args(argv)
 
@@ -998,6 +1060,16 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.save, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"\nSaved results to {args.save}")
+    if args.markdown:
+        with open(args.markdown, "w", encoding="utf-8") as f:
+            f.write(markdown_report(results, env, payload["settings"]))
+        print(f"Wrote Markdown report to {args.markdown}")
+    if args.export_github:
+        bigger, smaller = github_benchmark_entries(results)
+        for suffix, entries in (("bigger", bigger), ("smaller", smaller)):
+            with open(f"{args.export_github}-{suffix}.json", "w", encoding="utf-8") as f:
+                json.dump(entries, f, indent=2, ensure_ascii=False)
+        print(f"Wrote {len(bigger) + len(smaller)} chart entries to {args.export_github}-*.json")
 
     if args.compare:
         with open(args.compare, encoding="utf-8") as f:

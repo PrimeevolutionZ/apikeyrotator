@@ -179,10 +179,28 @@ async with AsyncAPIKeyRotator(api_keys=["key1", "key2"]) as rotator:
 | `await get / post / put / patch / delete / head(url, **kwargs)` | Shortcuts. |
 | `await close()` | Closes the client session and stops background refresh. Use `async with` or call it explicitly. |
 | `start_auto_refresh(interval)` / `await stop_auto_refresh()` | Background refresh as an asyncio task (needs a running loop; started automatically on first use when `auto_refresh_interval` is set). |
+| `await load_keys()` | Loads keys from `secret_provider` if that is still pending (see below) and returns the active keys. Called automatically by `async with` and the first request; safe to call concurrently. |
 | `keys`, `key_count`, `get_next_key()`, `get_key_statistics()`, `get_metrics()`, `get_circuit_states()`, `reset_key_health()`, `export_config()`, `refresh_keys_from_provider()`, `refresh_keys_from_provider_sync()` | Same as the sync rotator. |
 
 State backends that do network I/O (Redis) are called in a worker thread, so the
 event loop is never blocked.
+
+**Keys from a secret provider.** Created inside a running event loop with
+`secret_provider=` and no `api_keys`, the async rotator does not call the provider in the
+constructor (that would block the loop and run the provider on a different loop). Keys are
+loaded on first use - `async with`, the first request or `await rotator.load_keys()` - in
+the rotator's loop; until then `keys` is empty. A provider error is raised from that call
+and loading is retried on the next one. Created outside a loop, the rotator loads keys in
+the constructor, as the sync rotator does.
+
+```python
+from apikeyrotator import AsyncAPIKeyRotator, AWSSecretsManagerProvider
+
+async def main():
+    async with AsyncAPIKeyRotator(secret_provider=AWSSecretsManagerProvider(secret_name="prod/keys")) as rotator:
+        print(rotator.key_count)          # keys are loaded here
+        await rotator.get("https://api.example.com/data")
+```
 
 ---
 

@@ -82,7 +82,7 @@ jobs:
       - name: Benchmark this PR
         run: |
           set -o pipefail
-          ARGS="-n 2000 -r 3 --scenario-timeout 120 --save bench-head.json"
+          ARGS="-n 2000 -r 3 --scenario-timeout 120 --save bench-head.json --markdown bench.md"
           if [ -f bench-base.json ]; then
             # Gate only on machine-independent metrics; throughput is shown but not gated
             ARGS="$ARGS --compare bench-base.json --gate deterministic --threshold 10"
@@ -93,9 +93,15 @@ jobs:
         run: |
           {
             echo "## Benchmark"
+            echo
+            cat bench.md 2>/dev/null || echo "no benchmark output"
+            echo
+            echo "<details><summary>Comparison with the base branch</summary>"
+            echo
             echo '```'
-            cat bench.txt 2>/dev/null || echo "no benchmark output"
+            sed -n '/^Comparison with baseline/,$p' bench.txt 2>/dev/null || true
             echo '```'
+            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -104,5 +110,6 @@ jobs:
           path: |
             bench-base.json
             bench-head.json
+            bench.md
             bench.txt
           if-no-files-found: ignore

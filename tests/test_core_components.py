@@ -1,0 +1,382 @@
+"""
+Tests of the core components in isolation and of the shared request engine,
+driven directly (no HTTP client) - the engine is sans-IO: it yields effects and
+the test plays the role of the driver.
+"""
+
+import asyncio
+import logging
+
+import pytest
+
+from apikeyrotator import (
+    AllKeysExhaustedError,
+    APIKeyRotator,
+    AsyncAPIKeyRotator,
+    InMemoryStateBackend,
+)
+from apikeyrotator.core.engine import (
+    AFTER,
+    BEFORE,
+    CALL,
+    DONE,
+    ON_ERROR,
+    READ,
+    RELEASE,
+    SEND,
+    SHORT,
+    SLEEP,
+    NetworkFailure,
+)
+from apikeyrotator.core.keys import KeyPool
+from apikeyrotator.core.policy import RetryPolicy
+from apikeyrotator.core.request_builder import RequestBuilder, infer_auth_header
+from apikeyrotator.core.shared_state import StateSync
+from apikeyrotator.middleware import ResponseInfo, RotatorMiddleware
+
+
+LOG = logging.getLogger("test")
+
+
+class Resp:
+    def __init__(self, status, headers=None):
+        self.status_code = status
+        self.headers = headers or {}
+        self.content = b"{}"
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def drive(flow, responses, sent=None):
+    """Plays the driver: answers SEND with the next scripted response, records effects."""
+    responses = iter(responses)
+    effects = []
+    value = None
+    while True:
+        effect = flow.send(value)
+        effects.append(effect[0])
+        tag = effect[0]
+        if tag == SEND:
+            if sent is not None:
+                sent.append(effect[3]["headers"])
+            value = next(responses)
+            if isinstance(value, BaseException):
+                value = NetworkFailure(value, safe_to_retry=True)
+        elif tag in (DONE, SHORT):
+            return effect[1], effects
+        elif tag == CALL:
+            value = effect[1](*effect[2])
+        else:
+            value = None
+
+
+def make_rotator(**kwargs):
+    kwargs.setdefault("api_keys", ["key_a", "key_b"])
+    kwargs.setdefault("load_env_file", False)
+    kwargs.setdefault("base_delay", 0.01)
+    return APIKeyRotator(**kwargs)
+
+
+class TestEngineDrivenDirectly:
+    def test_success_is_a_single_send_then_done(self):
+        engine = make_rotator()._engine
+        ok = Resp(200)
+        result, effects = drive(engine.run("GET", "https://api.example.com/x", {}), [ok])
+        assert result is ok
+        assert effects == [SEND, DONE]
+
+    def test_retry_sleeps_and_releases_previous_failure(self):
+        engine = make_rotator()._engine
+        first, second, ok = Resp(503), Resp(503), Resp(200)
+        result, effects = drive(engine.run("GET", "https://api.example.com/x", {}), [first, second, ok])
+        assert result is ok
+        assert effects.count(SEND) == 3
+        assert effects.count(SLEEP) == 2
+        # sync semantics: only the newest failed response stays open until the end
+        assert effects.count(RELEASE) == 2
+
+    def test_401_switches_key_without_consuming_an_attempt(self):
+        rotator = make_rotator(max_retries=1)
+        sent = []
+        result, _ = drive(rotator._engine.run("GET", "https://api.example.com/x", {}),
+                          [Resp(401), Resp(200)], sent)
+        assert result.status_code == 200
+        assert rotator.key_count == 1
+        assert sent[0] != sent[1]  # a different key was used for the second attempt
+
+    def test_network_error_not_retried_for_post(self):
+        engine = make_rotator()._engine
+        flow = engine.run("POST", "https://api.example.com/x", {})
+        assert flow.send(None)[0] == SEND
+        with pytest.raises(ConnectionError):
+            flow.send(NetworkFailure(ConnectionError("reset"), safe_to_retry=False))
+
+    def test_exhausted_after_max_retries(self):
+        engine = make_rotator(max_retries=2)._engine
+        with pytest.raises(AllKeysExhaustedError) as exc:
+            drive(engine.run("GET", "https://api.example.com/x", {}), [Resp(500), Resp(500)])
+        assert exc.value.last_response.status_code == 500
+
+    def test_async_semantics_release_every_failed_response(self):
+        rotator = AsyncAPIKeyRotator(api_keys=["key_a"], load_env_file=False, base_delay=0.01)
+        engine = rotator._engine
+        engine.status_of = lambda r: r.status_code
+        result, effects = drive(engine.run("GET", "https://api.example.com/x", {}),
+                                [Resp(503), Resp(200)])
+        assert result.status_code == 200
+        assert effects == [SEND, RELEASE, SLEEP, SEND, DONE]
+
+    def test_short_circuit_middleware(self):
+        class Cached(RotatorMiddleware):
+            def before_request_sync(self, request_info):
+                return ResponseInfo(status_code=200, headers={}, content=b"cached",
+                                    request_info=request_info)
+
+        engine = make_rotator(middlewares=[Cached()])._engine
+        flow = engine.run("GET", "https://api.example.com/x", {})
+        effect = flow.send(None)
+        info = engine.chain.before_sync(effect[1], effect[2])
+        effect = flow.send(info)
+        assert effect[0] == SHORT and effect[1].content == b"cached"
+
+    def test_exception_thrown_into_flow_releases_breaker_probe(self):
+        rotator = make_rotator(circuit_breaker=True)
+        flow = rotator._engine.run("GET", "https://api.example.com/x", {})
+        flow.send(None)  # SEND - the breaker has granted this attempt
+        with pytest.raises(KeyboardInterrupt):
+            flow.throw(KeyboardInterrupt())
+        assert rotator.get_circuit_states() == {"api.example.com": "CLOSED"}
+
+
+class TestKeyPool:
+    def test_strategy_is_created_on_first_keys(self):
+        pool = KeyPool([], "round_robin", None, LOG)
+        assert pool.strategy is None
+        with pytest.raises(AllKeysExhaustedError):
+            pool.select()
+        pool.replace(["k1", "k2"])
+        assert pool.strategy is not None
+        assert {pool.select(), pool.select()} == {"k1", "k2"}
+
+    def test_remove_updates_strategy(self):
+        pool = KeyPool(["k1", "k2"], "round_robin", None, LOG)
+        assert pool.remove("k1")
+        assert not pool.remove("k1")
+        assert {pool.select() for _ in range(4)} == {"k2"}
+
+    def test_replace_keeps_metrics_of_kept_keys(self):
+        pool = KeyPool(["k1", "k2"], "round_robin", None, LOG)
+        pool.update("k1", True, 0.1)
+        pool.replace(["k1", "k3"])
+        assert pool.metrics_view()["k1"].total_requests == 1
+        assert pool.metrics_view()["k3"].total_requests == 0
+
+    def test_recovery_timeout_override(self):
+        pool = KeyPool(["k1"], "round_robin", None, LOG, recovery_timeout=5)
+        assert pool.recovery_timeout == 5
+
+
+class TestRetryPolicy:
+    def test_idempotency(self):
+        policy = RetryPolicy()
+        assert policy.is_idempotent("GET", None)
+        assert not policy.is_idempotent("POST", None)
+        assert policy.is_idempotent("POST", {"idempotency-key": "1"})
+        assert RetryPolicy(retry_non_idempotent=True).is_idempotent("POST", None)
+
+    def test_backoff_is_capped(self):
+        policy = RetryPolicy(base_delay=1, max_delay=10)
+        assert policy.backoff(0) <= 1.1
+        assert policy.backoff(1000) <= 10
+
+    def test_attempt_timeout_clipped_to_budget(self):
+        policy = RetryPolicy(timeout=10)
+        assert policy.attempt_timeout(None, None) == 10
+        assert policy.attempt_timeout(3, None) == 3
+        assert policy.attempt_timeout(None, 2.5) == 2.5
+        assert policy.attempt_timeout(None, -1) == 0.001
+        timeout_object = object()
+        assert policy.attempt_timeout(timeout_object, 1) is None
+
+    def test_invalid_max_retries(self):
+        with pytest.raises(ValueError):
+            RetryPolicy(max_retries=0)
+
+
+class TestRequestBuilder:
+    def test_auth_header_inference(self):
+        assert infer_auth_header("sk-abc") == ("Authorization", "Bearer sk-abc")
+        assert infer_auth_header("x" * 32) == ("X-API-Key", "x" * 32)
+        assert infer_auth_header("plain") == ("Authorization", "Key plain")
+
+    def test_auth_cache_is_bounded(self, monkeypatch):
+        monkeypatch.setattr("apikeyrotator.core.request_builder._AUTH_CACHE_SIZE", 3)
+        builder = RequestBuilder()
+        for i in range(10):
+            headers, _ = builder.headers_and_cookies(f"key{i}", None, "https://x")
+            assert headers["Authorization"] == f"Key key{i}"
+        assert len(builder._auth_cache) <= 3
+
+    def test_user_agent_and_proxy_cycle(self):
+        builder = RequestBuilder(user_agents=["a", "b"], proxy_list=["p1", "p2"])
+        assert [builder.next_user_agent() for _ in range(3)] == ["a", "b", "a"]
+        assert [builder.next_proxy() for _ in range(3)] == ["p1", "p2", "p1"]
+
+
+class TestStateSync:
+    def test_backend_failures_fail_open(self, caplog):
+        class Broken(InMemoryStateBackend):
+            def acquire_token(self, *args):
+                raise ConnectionError("redis down")
+
+            def report_invalid(self, *args):
+                raise ConnectionError("redis down")
+
+        pool = KeyPool(["k1"], "round_robin", None, LOG)
+        state = StateSync(Broken(), 1.0, pool, LOG, on_invalid=pool.remove)
+        assert state.acquire_token("k1", 1, 1.0) == 0.0
+        reports = []
+        state.report_invalid(reports, "k1")
+        state.flush(reports)  # logged, not raised
+        assert "redis down" in caplog.text
+
+    def test_key_ids_are_hashes(self):
+        pool = KeyPool(["secret-key"], "round_robin", None, LOG)
+        state = StateSync(None, 1.0, pool, LOG, on_invalid=pool.remove)
+        assert "secret-key" not in state.key_id("secret-key")
+
+
+class TestPublicAttributesReachComponents:
+    def test_setting_attributes_after_construction(self):
+        rotator = make_rotator()
+        rotator.max_retries = 7
+        rotator.timeout = 3
+        rotator.user_agents = ["UA"]
+        assert rotator._policy.max_retries == 7
+        assert rotator._policy.timeout == 3
+        headers, _ = rotator._prepare_headers_and_cookies("key_a", None, "https://x")
+        assert headers["User-Agent"] == "UA"
+
+
+class _LoopBoundProvider:
+    """A provider whose resources belong to the loop it was created in (like an aiohttp session)."""
+
+    def __init__(self, keys=("k1", "k2")):
+        self.loop = asyncio.get_running_loop()
+        self.keys = list(keys)
+        self.calls = 0
+
+    async def get_keys(self):
+        assert asyncio.get_running_loop() is self.loop, "provider used from a foreign event loop"
+        self.calls += 1
+        await asyncio.sleep(0)
+        return list(self.keys)
+
+    async def refresh_keys(self):
+        return await self.get_keys()
+
+
+class TestAsyncLazyProviderKeys:
+    @pytest.mark.asyncio
+    async def test_constructor_in_running_loop_does_not_call_provider(self):
+        provider = _LoopBoundProvider()
+        rotator = AsyncAPIKeyRotator(secret_provider=provider, load_env_file=False)
+        assert provider.calls == 0
+        assert rotator.keys == []
+        assert await rotator.load_keys() == ["k1", "k2"]
+        assert rotator.rotation_strategy is not None
+        await rotator.close()
+
+    @pytest.mark.asyncio
+    async def test_async_with_loads_keys_once(self):
+        provider = _LoopBoundProvider()
+        async with AsyncAPIKeyRotator(secret_provider=provider, load_env_file=False) as rotator:
+            assert rotator.keys == ["k1", "k2"]
+            await asyncio.gather(*(rotator.load_keys() for _ in range(5)))
+        assert provider.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_first_request_loads_keys(self):
+        from unittest.mock import AsyncMock, patch
+
+        provider = _LoopBoundProvider(keys=["sk-lazy"])
+        rotator = AsyncAPIKeyRotator(secret_provider=provider, load_env_file=False)
+        sent = []
+
+        async def fake_request(method, url, **kwargs):
+            sent.append(kwargs["headers"])
+            response = AsyncMock(status=200, headers={})
+            response.release = AsyncMock()
+            return response
+
+        with patch("aiohttp.ClientSession.request", side_effect=fake_request):
+            response = await rotator.get("https://api.example.com/x")
+        assert response.status == 200
+        assert sent[0]["Authorization"] == "Bearer sk-lazy"
+        await rotator.close()
+
+    @pytest.mark.asyncio
+    async def test_provider_failure_is_raised_and_retried_later(self):
+        provider = _LoopBoundProvider()
+        original = provider.get_keys
+        attempts = []
+
+        async def flaky():
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise ConnectionError("secret store unavailable")
+            return await original()
+
+        provider.get_keys = flaky
+        rotator = AsyncAPIKeyRotator(secret_provider=provider, load_env_file=False)
+        with pytest.raises(ConnectionError):
+            await rotator.load_keys()
+        assert await rotator.load_keys() == ["k1", "k2"]
+        await rotator.close()
+
+    @pytest.mark.asyncio
+    async def test_empty_provider_falls_back_to_env(self, monkeypatch):
+        monkeypatch.setenv("LAZY_KEYS", "env1,env2")
+        provider = _LoopBoundProvider(keys=[])
+        rotator = AsyncAPIKeyRotator(secret_provider=provider, env_var="LAZY_KEYS", load_env_file=False)
+        assert await rotator.load_keys() == ["env1", "env2"]
+        await rotator.close()
+
+    def test_outside_a_loop_keys_are_loaded_in_the_constructor(self, tmp_path):
+        from apikeyrotator import FileSecretProvider
+
+        path = tmp_path / "keys.txt"
+        path.write_text("f1,f2")
+        rotator = AsyncAPIKeyRotator(secret_provider=FileSecretProvider(str(path)), load_env_file=False)
+        assert rotator.keys == ["f1", "f2"]
+
+
+class TestEngineCleanupWithBlockingBackend:
+    def test_pending_reports_are_flushed_before_an_exception_propagates(self):
+        class BlockingBackend(InMemoryStateBackend):
+            blocking = True  # like Redis: async rotators offload calls to a thread
+
+        class Observer(RotatorMiddleware):
+            pass
+
+        backend = BlockingBackend(shared=True)
+        rotator = AsyncAPIKeyRotator(api_keys=["key_a", "key_b"], load_env_file=False,
+                                     state_backend=backend, middlewares=[Observer()])
+        engine = rotator._engine
+        engine.status_of = lambda r: r.status_code
+
+        flow = engine.run("GET", "https://api.example.com/x", {})
+        assert flow.send(None)[0] == CALL          # shared state pulled in a worker thread
+        assert flow.send(backend.snapshot())[0] == BEFORE
+        assert flow.send(None)[0] == SEND
+        assert flow.send(Resp(429, {"Retry-After": "30"}))[0] == READ
+        assert flow.send(b"")[0] == AFTER
+        assert flow.send(None)[0] == ON_ERROR  # the 429 report is pending
+        effect = flow.throw(KeyboardInterrupt())
+        assert effect[0] == CALL                     # reports flushed off the event loop...
+        effect[1](*effect[2])
+        with pytest.raises(KeyboardInterrupt):       # ...then the exception continues
+            flow.send(None)
+        assert backend.snapshot().rate_limited       # the rate limit reached shared state

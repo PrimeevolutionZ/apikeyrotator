@@ -310,6 +310,11 @@ Keys that were rejected with 401/403 are not re-added by a refresh; metrics of k
 that stay are preserved. A custom provider is any object with
 `async get_keys()` and `async refresh_keys()` returning `list[str]`.
 
+In async code, `AsyncAPIKeyRotator(secret_provider=...)` loads the keys on first use
+(`async with`, the first request or `await rotator.load_keys()`) in your event loop, so a
+provider may use loop-bound clients such as an `aiohttp.ClientSession`. See
+[API Reference](API_REFERENCE.md#asyncapikeyrotator).
+
 ---
 
 ## Custom Callbacks

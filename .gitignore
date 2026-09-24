@@ -16,3 +16,9 @@ htmlcov/
 # Benchmark results (machine-specific)
 benchmarks/results/
 .venv*/
+
+# IDE / editor settings
+.idea/
+.vscode/
+*.swp
+.DS_Store

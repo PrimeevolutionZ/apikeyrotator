@@ -18,12 +18,23 @@ All notable changes to APIKeyRotator will be documented in this file.
 - `CircuitBreaker` utility rewritten: thread-safe, limited half-open probes, `retry_after()`.
 - Benchmark: CPU time per operation for every scenario, `resources` group (memory per key, leak check, allocations per request, import cost), scenarios for the new features, `--gate deterministic`, `--scenario-timeout`, best-of-N reporting.
 - **CI** (GitHub Actions): ruff, tests on Python 3.12/3.13, and a benchmark of every PR against its base branch (gated on machine-independent metrics).
+- `.idea/` removed from the repository (IDE folders are git-ignored); `aioresponses` removed from the test extras (it does not support aiohttp 3.14+).
 
 - **`failover` rotation strategy** (`FailoverRotationStrategy`): always the first available key, the rest are backups. The never-implemented `RotationStrategy.RATE_LIMIT_AWARE` enum member was removed (it always raised `ValueError`).
 - `py.typed` marker - type hints are now visible to type checkers (the package already declared `Typing :: Typed`).
 
 ### Changed
 - The default auth header is no longer added when the request or `header_callback` already sets `X-API-Key` (previously the key was sent twice: `X-API-Key` and `Authorization: Key ...`).
+- **Core split into components** (`apikeyrotator/core/`): `KeyPool` (keys, metrics, strategy), `RetryPolicy`, `RateLimiter`, `BreakerRegistry`, `StateSync`, `RequestBuilder`, `MiddlewareChain`. The retry loop exists **once**, in the sans-IO `RequestEngine` (a generator yielding I/O effects); `APIKeyRotator` and `AsyncAPIKeyRotator` only perform the effects. `rotator.py` shrank from 1674 to ~790 lines, and the two copies of the retry loop became one. The public API is unchanged: constructor arguments, attributes (still writable, e.g. `rotator.max_retries = 5`), methods, and `key_manager` (now a `KeyPool`, old method names kept). Behaviour is identical in all resilience benchmarks (upstream calls, waiting, success rate).
+- **`AsyncAPIKeyRotator` + `secret_provider` inside a running event loop** no longer calls the provider in the constructor. That call blocked the loop and ran the provider on a helper thread's loop, which broke providers holding loop-bound resources (`RuntimeError: ... attached to a different loop`). Keys are now loaded on first use (`async with`, the first request or the new `await rotator.load_keys()`) in the rotator's loop. Outside a loop, keys are still loaded in the constructor.
+- Sync rotator with middlewares: a network error while reading the response body is now handled like any network error of the attempt (retried according to the idempotency rules) instead of escaping the retry loop.
+- The inferred auth header is cached per key.
+
+### Benchmark
+- Published results: `benchmarks/RESULTS.md` (reference run), history charts on GitHub Pages updated by `.github/workflows/benchmark.yml` on every change on `master`, Markdown tables in CI job summaries (PRs also get the comparison with the base branch).
+- `--markdown FILE` (Markdown report) and `--export-github PREFIX` (github-action-benchmark data).
+- The virtual clock now starts at a fixed, minute-aligned epoch: quota scenarios depended on the wall clock and varied by up to ~10% between runs (enough to trip the CI gate); all resilience metrics are now identical on every run.
+- Transient allocations per request: +0.5 KB, because the shared request loop's generator frame lives on the heap during a request (freed afterwards; memory growth stays 0). Throughput is unchanged within noise.
 
 ### Documentation
 - All guides rewritten against the actual API and checked automatically: `scripts/check_docs.py` verifies that every example's imports, parameters and methods exist and that links/anchors resolve (runs in CI); every example was also executed with a mocked network.

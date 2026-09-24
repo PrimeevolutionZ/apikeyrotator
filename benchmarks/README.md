@@ -10,7 +10,23 @@ python benchmarks/bench_core.py --quick                 # fast smoke run
 python benchmarks/bench_core.py                         # full run (best of 3)
 python benchmarks/bench_core.py -g resources            # one group
 python benchmarks/bench_core.py -k "select_.*_1000"     # regex filter
+python benchmarks/bench_core.py --markdown out.md        # Markdown report
 ```
+
+## Published results
+
+- **[RESULTS.md](RESULTS.md)** - the latest reference run (all scenarios, one machine).
+- **History charts**: every push to `master` that touches the library runs the benchmark
+  (`.github/workflows/benchmark.yml`) and appends the results to the `gh-pages` branch -
+  <https://primeevolutionz.github.io/apikeyrotator/bench/> (one chart per scenario and metric,
+  one point per commit). A drop beyond the alert threshold is commented on the commit.
+- **Every CI run** (push and PR) has the results table in its job summary; PRs also show the
+  comparison with the base branch.
+
+Throughput numbers from shared GitHub runners are noisy (±10-20%); upstream calls,
+waiting time, success rate and memory are deterministic and comparable across runs.
+`--export-github PREFIX` writes the chart data (`PREFIX-bigger.json`, `PREFIX-smaller.json`)
+in the format of [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
 
 ## Workflow: compare before/after a change
 
@@ -59,7 +75,8 @@ This is exactly what the `benchmark` job in `.github/workflows/ci.yml` does for 
 Resilience scenarios use a **virtual clock**: `time.sleep`/`asyncio.sleep` return instantly
 but advance `time.time()`, so `Retry-After` windows, token buckets and circuit breaker
 timeouts expire exactly as in real time, and the benchmark reports how long the rotator
-*would* have waited.
+*would* have waited. The clock starts at a fixed, minute-aligned epoch and moves only on
+sleeps, so these metrics are identical on every run and every machine.
 
 Speed numbers are the **best of N repeats** (like `timeit`): interference from other
 processes only slows a run down, so the fastest repeat is the least noisy estimate.
@@ -90,7 +107,7 @@ Same machine (Python 3.12, 4 CPUs), back-to-back runs, `-n 4000 -r 7`.
 |---|---|---|
 | Memory per key, round-robin | 374 B | **230 B** (−38%) |
 | Memory per key, LRU / health-based | 730 B | **230 B** (−69%) |
-| Transient allocations per sync request | 2.96 KB | 2.53 KB (−15%) |
+| Transient allocations per sync request | 2.96 KB | 3.05 KB (+3%)³ |
 | `import apikeyrotator` time | 245 ms | **69 ms** (−72%) |
 | `import apikeyrotator` RSS | 33.5 MB | **13.8 MB** (−59%) |
 | Memory growth per 1k requests (leak check) | 0 | 0 |
@@ -110,19 +127,22 @@ Same machine (Python 3.12, 4 CPUs), back-to-back runs, `-n 4000 -r 7`.
 ¹ The rotator now reads `X-RateLimit-Remaining` on every success (proactive rate limiting),
 and `RateLimitMiddleware` reads the same headers again - about 2.6 µs per request.
 ² Extra transport layer (pluggable aiohttp/httpx backends), about 0.8 µs per request.
+³ The request loop is shared by the sync and async rotators and runs as a generator
+(`apikeyrotator/core/engine.py`); its frame lives on the heap for the duration of a request
+(~0.5 KB, freed afterwards - memory growth stays 0).
 
 **New resilience features** (virtual clock)
 
 | Scenario | Upstream calls / request | Waiting per 1k requests |
 |---|---|---|
-| Host answers 503 to everything, no breaker | 3.00 | 3155 s |
-| Same, `circuit_breaker=True` | **0.02** | **21 s** |
-| 10 keys × 10 req/min quota, reacting to 429 only | 1.10 | 482 s |
-| Same, `X-RateLimit-Remaining` hints (default) | **1.01** | 482 s |
-| Same, `key_rate_limit=(10, 60)` token bucket | **1.00** (no 429s) | 500 s |
+| Host answers 503 to everything, no breaker | 3.00 | 3154 s |
+| Same, `circuit_breaker=True` | **0.01** | **13 s** |
+| 10 keys × 10 req/min quota, reacting to 429 only | 1.09 | 541 s |
+| Same, `X-RateLimit-Remaining` hints (default) | **1.01** | 540 s |
+| Same, `key_rate_limit=(10, 60)` token bucket | **1.00** (no 429s) | 540 s |
 
-The token bucket spreads requests evenly (no bursts at window boundaries), which costs a
-little more waiting than the server's fixed window would allow, but never triggers a 429.
+With 200 requests against 100 requests/minute of total quota, every variant has to wait the
+same ~540 s per 1000 requests; the difference is how many requests are wasted on 429s.
 
 ## Reference: 0.6.1 → 0.7.0
 

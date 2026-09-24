@@ -38,7 +38,7 @@ import apikeyrotator  # noqa: E402
 
 DEFAULT_FILES = [
     "README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md",
-    *sorted(glob.glob("docs/*.md", root_dir=ROOT)), "benchmarks/README.md",
+    *sorted(glob.glob("docs/*.md", root_dir=ROOT)), "benchmarks/README.md", "benchmarks/RESULTS.md",
 ]
 CODE_BLOCK = re.compile(r"^(```|~~~)python[ \t]*\n(.*?)^\1[ \t]*$", re.S | re.M)
 FENCE = re.compile(r"^(```|~~~).*?^\1[ \t]*$", re.S | re.M)

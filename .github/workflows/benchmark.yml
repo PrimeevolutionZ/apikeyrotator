@@ -1,0 +1,105 @@
+name: Benchmark history
+
+# Runs the benchmark on every change of the library on master and publishes the
+# results: a table in the run summary, and history charts on GitHub Pages
+# (https://primeevolutionz.github.io/apikeyrotator/bench/).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "apikeyrotator/**"
+      - "benchmarks/**"
+      - "pyproject.toml"
+      - ".github/workflows/benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # push the history to the gh-pages branch
+
+concurrency:
+  group: benchmark-history
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Run and publish benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[test]"
+
+      - name: Run benchmark
+        run: |
+          timeout 1800 python benchmarks/bench_core.py -n 3000 -r 3 --scenario-timeout 120 \
+            --save bench.json --markdown bench.md --export-github bench
+
+      - name: Job summary
+        run: |
+          {
+            echo "## Benchmark"
+            echo
+            echo "Throughput and latency depend on the runner; calls/req, sleep and memory are deterministic."
+            echo
+            cat bench.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the gh-pages branch on first run
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
+            empty_tree=$(git mktree < /dev/null)
+            commit=$(git commit-tree "$empty_tree" -m "Initialize gh-pages for benchmark history")
+            git push origin "$commit:refs/heads/gh-pages"
+          fi
+
+      - name: Publish throughput history
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Throughput (higher is better)
+          tool: customBiggerIsBetter
+          output-file-path: bench-bigger.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Shared runners are noisy: only flag big throughput drops
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          max-items-in-chart: 100
+
+      - name: Publish latency, resilience and memory history
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Latency, upstream calls, waiting and memory (lower is better)
+          tool: customSmallerIsBetter
+          output-file-path: bench-smaller.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: "120%"
+          comment-on-alert: true
+          fail-on-alert: false
+          max-items-in-chart: 100
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            bench.json
+            bench.md
+            bench-bigger.json
+            bench-smaller.json
+          if-no-files-found: ignore
