@@ -3,12 +3,14 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ["*"]
   pull_request:
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run on master or a tag - it may be creating a release
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -54,6 +56,17 @@ jobs:
         run: pip install -e ".[test]"
       - name: Run tests
         run: pytest -q --cov=apikeyrotator --cov-report=term-missing:skip-covered
+
+  release:
+    name: Release
+    needs: [lint, docs, test]
+    # A new version merged to master, or a pushed tag, becomes a tag + GitHub release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref_type == 'tag')
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      id-token: write
+    secrets: inherit
 
   benchmark:
     name: Benchmark vs base branch

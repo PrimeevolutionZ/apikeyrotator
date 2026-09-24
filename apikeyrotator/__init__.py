@@ -95,7 +95,7 @@ from .utils import (
 )
 
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 __author__ = "Prime Evolution"
 
 __all__ = [

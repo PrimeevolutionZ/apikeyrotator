@@ -107,7 +107,7 @@ Same machine (Python 3.12, 4 CPUs), back-to-back runs, `-n 4000 -r 7`.
 |---|---|---|
 | Memory per key, round-robin | 374 B | **230 B** (−38%) |
 | Memory per key, LRU / health-based | 730 B | **230 B** (−69%) |
-| Transient allocations per sync request | 2.96 KB | 3.05 KB (+3%)³ |
+| Transient allocations per sync request | 2.96 KB | 2.53 KB (−15%)³ |
 | `import apikeyrotator` time | 245 ms | **69 ms** (−72%) |
 | `import apikeyrotator` RSS | 33.5 MB | **13.8 MB** (−59%) |
 | Memory growth per 1k requests (leak check) | 0 | 0 |
@@ -127,9 +127,9 @@ Same machine (Python 3.12, 4 CPUs), back-to-back runs, `-n 4000 -r 7`.
 ¹ The rotator now reads `X-RateLimit-Remaining` on every success (proactive rate limiting),
 and `RateLimitMiddleware` reads the same headers again - about 2.6 µs per request.
 ² Extra transport layer (pluggable aiohttp/httpx backends), about 0.8 µs per request.
-³ The request loop is shared by the sync and async rotators and runs as a generator
-(`apikeyrotator/core/engine.py`); its frame lives on the heap for the duration of a request
-(~0.5 KB, freed afterwards - memory growth stays 0).
+³ 0.8.1: 3.05 KB. The request loop is shared by the sync and async rotators and runs as a
+generator (`apikeyrotator/core/engine.py`); its frame lives on the heap for the duration of a
+request (~0.5 KB, freed afterwards - memory growth stays 0). Throughput is unchanged.
 
 **New resilience features** (virtual clock)
 

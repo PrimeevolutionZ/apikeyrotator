@@ -1,0 +1,135 @@
+name: Release
+
+# Creates the tag (if missing) and a GitHub release for the version in pyproject.toml.
+#
+# - Called by CI after lint/docs/tests pass on a push to master or a tag push:
+#   bumping the version and merging to master is all a release needs.
+# - Can be run by hand (Actions -> Release -> Run workflow) for any commit.
+# - Publishing to PyPI is opt-in: set the repository variable PYPI_PUBLISH=true and
+#   configure a trusted publisher for this workflow on PyPI (environment "pypi").
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or branch to release (its pyproject.toml version becomes the tag)"
+        required: true
+        default: master
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag and GitHub release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.tag.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          init=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('apikeyrotator/__init__.py').read()).group(1))")
+          if [ "$version" != "$init" ]; then
+            echo "::error::pyproject.toml version $version != apikeyrotator.__version__ $init"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create or verify the tag
+        id: tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          head=$(git rev-parse HEAD)
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ -z "${{ inputs.ref }}" ]; then
+            if [ "$GITHUB_REF_NAME" != "$VERSION" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match the package version $VERSION"
+              exit 1
+            fi
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          elif git rev-parse -q --verify "refs/tags/$VERSION" > /dev/null; then
+            tagged=$(git rev-list -n 1 "refs/tags/$VERSION")
+            if [ "$tagged" != "$head" ]; then
+              echo "::notice::$VERSION is already released (tag on ${tagged:0:7}); bump the version to release this commit"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            git tag -a "$VERSION" -m "apikeyrotator $VERSION" "$head"
+            git push origin "refs/tags/$VERSION"
+            echo "::notice::created tag $VERSION on ${head:0:7}"
+            echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build and check
+        if: steps.tag.outputs.publish == 'true'
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install -q dist/*.whl
+          /tmp/smoke/bin/python -c "import apikeyrotator as a; assert a.__version__ == '${{ steps.version.outputs.version }}'; print(a.__version__)"
+
+      - name: Release notes from CHANGELOG.md
+        if: steps.tag.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md" > notes.md
+
+      - name: Create GitHub release
+        if: steps.tag.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::notice::release $TAG already exists"
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "apikeyrotator $TAG" --notes-file notes.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: steps.tag.outputs.publish == 'true'
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: release
+    if: needs.release.outputs.publish == 'true' && vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

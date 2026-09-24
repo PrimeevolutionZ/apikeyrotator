@@ -243,13 +243,22 @@ calls, waiting time, success rate, memory). See [benchmarks/README.md](benchmark
 
 ## Release Process
 
-Releases are made by maintainers:
+Releases are automated (`.github/workflows/release.yml`, called by CI):
 
-1. Bump the version in `pyproject.toml` **and** `apikeyrotator/__init__.py` (`__version__`).
-2. Update `CHANGELOG.md` (move items under the new version, note breaking changes).
-3. Make sure CI is green on `master`.
-4. Tag and push: `git tag v0.8.0 && git push origin v0.8.0`.
-5. Create a GitHub release and publish to PyPI (`python -m build && twine upload dist/*`).
+1. Bump the version in `pyproject.toml` **and** `apikeyrotator/__init__.py` (`__version__`) -
+   the release job fails if they differ.
+2. Add a `## [X.Y.Z] - date` section to `CHANGELOG.md` (it becomes the release notes).
+3. Merge to `master`. When lint, docs and tests pass, CI creates the tag `X.Y.Z` (tags have
+   no `v` prefix) and a GitHub release with the wheel and the sdist. A version that is
+   already tagged is skipped, so ordinary merges don't release anything.
+
+Alternatives: push a tag yourself (`git tag -a 0.9.0 -m "apikeyrotator 0.9.0" && git push
+origin 0.9.0` - CI runs on tags too, and the tag must match the package version), or run
+**Actions → Release → Run workflow** for any commit.
+
+PyPI publishing is opt-in: add a [trusted publisher](https://docs.pypi.org/trusted-publishers/)
+on PyPI for this repository (workflow `release.yml`, environment `pypi`) and set the repository
+variable `PYPI_PUBLISH=true`.
 
 Versions follow [Semantic Versioning](https://semver.org/). Before 1.0, minor versions
 (`0.7 → 0.8`) may contain breaking changes; they are listed in the changelog.

@@ -3,6 +3,9 @@ name: Benchmark history
 # Runs the benchmark on every change of the library on master and publishes the
 # results: a table in the run summary, and history charts on GitHub Pages
 # (https://primeevolutionz.github.io/apikeyrotator/bench/).
+#
+# The history data is stored in the gh-pages branch (created on the first run);
+# the site is deployed with GitHub Actions (Settings -> Pages -> Source: GitHub Actions).
 
 on:
   push:
@@ -16,6 +19,8 @@ on:
 
 permissions:
   contents: write  # push the history to the gh-pages branch
+  pages: write     # deploy the site
+  id-token: write
 
 concurrency:
   group: benchmark-history
@@ -93,6 +98,21 @@ jobs:
           fail-on-alert: false
           max-items-in-chart: 100
 
+      - name: Prepare the site from the gh-pages branch
+        run: |
+          git fetch origin gh-pages
+          mkdir site
+          git --work-tree=site checkout origin/gh-pages -- .
+          # The charts live in bench/; send the site root there
+          if [ ! -f site/index.html ]; then
+            echo '<!doctype html><meta http-equiv="refresh" content="0; url=bench/"><a href="bench/">Benchmark history</a>' > site/index.html
+          fi
+          touch site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -103,3 +123,14 @@ jobs:
             bench-bigger.json
             bench-smaller.json
           if-no-files-found: ignore
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}bench/
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

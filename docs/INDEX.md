@@ -502,6 +502,12 @@ Recommended reading order:
 
 ---
 
+## 🆕 What's New in 0.8.1
+
+- 🧱 **Core split into components** with one request loop shared by the sync and async rotators (public API unchanged)
+- ⏳ `AsyncAPIKeyRotator` loads keys from a secret provider on first use in your event loop (`await rotator.load_keys()`)
+- 📊 Published benchmark results: [RESULTS.md](../benchmarks/RESULTS.md) and [history charts](https://primeevolutionz.github.io/apikeyrotator/bench/)
+
 ## 🆕 What's New in 0.8.0
 
 - 🧯 **Resilience**: request deadlines (`total_timeout`), per-host circuit breaker, safe retries of POST/PATCH
