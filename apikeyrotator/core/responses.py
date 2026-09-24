@@ -297,7 +297,11 @@ class UnifiedResponse:
             return self.content.decode("utf-8", errors="replace")
 
     def json(self, **kwargs) -> Any:
-        return json.loads(self.content, **kwargs)
+        """Parses the body as JSON (raises json.JSONDecodeError for non-JSON bodies)."""
+        try:
+            return json.loads(self.content, **kwargs)
+        except UnicodeDecodeError:  # not UTF-8/16/32: decode with the declared charset
+            return json.loads(self.text, **kwargs)
 
     def raise_for_status(self) -> UnifiedResponse:
         """Raises HTTPStatusError (with ``.response``) for 4xx/5xx; returns self otherwise."""

@@ -285,7 +285,7 @@ app = Flask(__name__)
 @app.route("/metrics")
 def metrics():
     # Render on every scrape so the numbers are current
-    text = PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_statistics())
+    text = PrometheusExporter.export(rotator)
     return Response(text, mimetype="text/plain; version=0.0.4")
 
 if __name__ == "__main__":

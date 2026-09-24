@@ -33,17 +33,26 @@ class PrometheusExporter:
             output.append(f"{name}{labels} {value}")
 
     @staticmethod
-    def export(metrics: RotatorMetrics, key_metrics: dict[str, Any] | None = None) -> str:
+    def export(metrics: Any, key_metrics: dict[str, Any] | None = None) -> str:
         """
         Exports metrics in Prometheus format.
 
         Args:
-            metrics: RotatorMetrics instance
-            key_metrics: Optional dict with key statistics from rotator.get_key_statistics()
+            metrics: A rotator (its metrics and per-key statistics are used) or a
+                RotatorMetrics instance
+            key_metrics: Per-key statistics (``rotator.get_key_statistics()``) when
+                ``metrics`` is a RotatorMetrics instance
 
         Returns:
             str: Metrics in Prometheus format
         """
+        if not isinstance(metrics, RotatorMetrics) and hasattr(metrics, "get_key_statistics"):
+            rotator = metrics
+            if key_metrics is None:
+                key_metrics = rotator.get_key_statistics()
+            metrics = rotator.metrics
+            if metrics is None:
+                raise ValueError("The rotator was created with enable_metrics=False")
         output: list[str] = []
         family = PrometheusExporter._family
 

@@ -24,6 +24,7 @@ from apikeyrotator.core.responses import Headers
 
 
 BODY = {"hello": "мир"}
+BLOB = bytes(range(256)) * 4096 + b"\x00\xff"   # 1 MB of binary, not valid UTF-8
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -38,6 +39,22 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("X-Custom", "1")
             self.send_header("Set-Cookie", "a=1")
             self.send_header("Set-Cookie", "b=2")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path.startswith("/blob"):
+            payload = BLOB
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path.startswith("/latin"):
+            payload = "Größe".encode("latin-1")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=iso-8859-1")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -168,6 +185,35 @@ def test_native_responses_stay_the_default(server):
         assert isinstance(rotator.get(f"{server}/data"), requests.Response)
         rotator.unified_response = True
         assert isinstance(rotator.get(f"{server}/data"), UnifiedResponse)
+
+
+@pytest.mark.parametrize("backend", SYNC_BACKENDS)
+def test_binary_body_is_byte_exact_sync(server, backend):
+    if backend == "httpx":
+        pytest.importorskip("httpx")
+    with APIKeyRotator(api_keys=["k1"], http_backend=backend, unified_response=True) as rotator:
+        response = rotator.get(f"{server}/blob")
+    assert response.content == BLOB
+    assert isinstance(response.text, str)   # decodes with replacement, never raises
+
+
+@pytest.mark.parametrize("backend", ASYNC_BACKENDS)
+@pytest.mark.asyncio
+async def test_binary_body_is_byte_exact_async(server, backend):
+    if backend == "httpx":
+        pytest.importorskip("httpx")
+    async with AsyncAPIKeyRotator(api_keys=["k1"], http_backend=backend, unified_response=True) as rotator:
+        response = await rotator.get(f"{server}/blob")
+    assert response.content == BLOB
+
+
+def test_declared_charset_and_json_errors(server):
+    with APIKeyRotator(api_keys=["k1"], unified_response=True) as rotator:
+        response = rotator.get(f"{server}/latin")
+    assert response.encoding == "iso-8859-1"
+    assert response.text == "Größe"
+    with pytest.raises(json.JSONDecodeError):
+        response.json()
 
 
 class TestHeaders:

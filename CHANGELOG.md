@@ -2,6 +2,19 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- `PrometheusExporter.export(rotator)` accepts the rotator itself (the `metrics, key_metrics=` form still works).
+- `UnifiedResponse.json()` raises `json.JSONDecodeError` for bodies that are not JSON in any encoding (it raised `UnicodeDecodeError` for non-UTF-8 bodies).
+
+### Tests
+- Concurrency: every strategy under 8 threads (request, per-key and global counters must match exactly), concurrent key removal / parking / replacement, per-host circuit breakers, byte-exact binary bodies for all four backends.
+- Shared state against a real Redis with several processes (global token bucket, revoked key propagation); CI runs it with a Redis service.
+
+### Documentation
+- Consistency model of the shared state (token buckets strong, rate-limited / revoked keys eventual within `state_sync_interval`), breaker scope per host, keys containing commas.
+
 ## [0.9.0] - 2026-09-24
 
 Safety for requests with side effects (payments, orders, messages), one response type for

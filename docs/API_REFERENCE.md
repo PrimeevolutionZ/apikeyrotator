@@ -57,7 +57,7 @@ APIKeyRotator(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `api_keys` | `list[str] \| str \| None` | `None` | Keys as a list or a comma-separated string. If `None`, keys come from `secret_provider`, else from the `env_var` environment variable. Duplicates and blanks are removed. |
+| `api_keys` | `list[str] \| str \| None` | `None` | Keys as a list or a comma-separated string (pass a list if a key itself contains a comma). If `None`, keys come from `secret_provider`, else from the `env_var` environment variable. Duplicates and blanks are removed. |
 | `env_var` | `str` | `"API_KEYS"` | Environment variable with comma-separated keys. |
 | `load_env_file` | `bool` | `False` | Load the `.env` file of the working directory (or its parents) into `os.environ` first. Needs `python-dotenv`. Off by default: the library does not change the process environment unless asked. |
 | `secret_provider` | `SecretProvider \| None` | `None` | Source of keys (env, file, AWS, GCP...). See [Secret Providers](#secret-providers). |
@@ -541,7 +541,8 @@ endpoints, stats are aggregated under `"__other__"`, so memory stays bounded.
 ```python
 from apikeyrotator import PrometheusExporter
 
-text = PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_statistics())
+text = PrometheusExporter.export(rotator)
+# or with the parts: PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_statistics())
 ```
 
 Returns the Prometheus text format: `rotator_total_requests`,

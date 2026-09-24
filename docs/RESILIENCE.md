@@ -136,6 +136,8 @@ print(rotator.get_circuit_states())   # {'api.example.com': 'OPEN'}
 ```
 
 - `4xx` and `429` mean "the host is alive" and do not trip the breaker.
+- Breakers are per `host[:port]` of the URL: a dead host doesn't affect requests to other
+  hosts (note that `localhost` and `127.0.0.1` are different hosts).
 - In HALF_OPEN only `half_open_max_calls` probes (default 1) are let through.
 - `CircuitOpenError` is an `AllKeysExhaustedError`, so `FallbackRouter` switches to the
   next provider immediately.
@@ -184,6 +186,20 @@ rotator = APIKeyRotator(
 
 Shared: rate-limited keys (until when), keys rejected with 401/403, token buckets
 (atomic Lua script using the Redis server clock).
+
+**Consistency model:**
+
+| State | Consistency | Delay until other processes see it |
+|---|---|---|
+| Token buckets (`key_rate_limit`) | strong - every token is taken in Redis atomically, so the limit is global across all processes | none |
+| Rate-limited keys (429, `X-RateLimit-Remaining: 0`) | eventual | up to `state_sync_interval` (default 1 s) + one Redis round trip |
+| Rejected keys (401/403) | eventual | same |
+
+During that delay another process may still send a request with a key that was just
+limited or revoked; it gets the same 429/401 and handles it locally. Lower
+`state_sync_interval` for faster propagation (each sync is one Redis call per request at
+most once per interval). Verified with 4 processes against a real Redis: a shared
+`key_rate_limit=(20, 60)` on 2 keys let exactly 40 requests through.
 
 - **Raw keys never reach Redis** - only `sha256(key)` (or HMAC with `salt=b"..."`).
 - **Fail-open**: if Redis is unavailable, requests continue with local state; a warning

@@ -246,7 +246,7 @@ for key, stats in rotator.get_key_statistics().items():
 ```python
 from apikeyrotator import PrometheusExporter
 
-text = PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_statistics())
+text = PrometheusExporter.export(rotator)
 
 with open("/var/lib/node_exporter/textfile/rotator.prom", "w") as f:   # textfile collector
     f.write(text)
