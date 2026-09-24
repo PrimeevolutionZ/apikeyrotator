@@ -2,15 +2,16 @@
 Middleware for rate-limiting management
 """
 
-import time
 import asyncio
 import logging
 import random
 import threading
-from typing import Dict, Any, Optional
+import time
+from typing import Any
+
+from ..utils.error_classifier import get_header, parse_retry_after, rate_limit_header_values
 from .base import RotatorMiddleware
-from .models import RequestInfo, ResponseInfo, ErrorInfo
-from ..utils.error_classifier import get_header, parse_retry_after
+from .models import ErrorInfo, RequestInfo, ResponseInfo
 
 
 class RateLimitMiddleware(RotatorMiddleware):
@@ -22,7 +23,7 @@ class RateLimitMiddleware(RotatorMiddleware):
         self,
         pause_on_limit: bool = True,
         max_tracked_keys: int = 1000,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
         max_wait: float = 300.0
     ):
         """
@@ -32,7 +33,7 @@ class RateLimitMiddleware(RotatorMiddleware):
             logger: Logger for output messages
             max_wait: Upper bound (seconds) for a single pause
         """
-        self.rate_limits: Dict[str, Dict[str, Any]] = {}
+        self.rate_limits: dict[str, dict[str, Any]] = {}
         self.pause_on_limit = pause_on_limit
         self.max_wait = max(0.0, max_wait)
         self.max_tracked_keys = max(10, max_tracked_keys)
@@ -84,12 +85,12 @@ class RateLimitMiddleware(RotatorMiddleware):
     # Values below this are treated as "seconds until reset", larger values as UNIX timestamps
     _EPOCH_THRESHOLD = 1_000_000_000
 
-    def _get_header_nocase(self, headers: Dict[str, str], key: str) -> Optional[str]:
+    def _get_header_nocase(self, headers: dict[str, str], key: str) -> str | None:
         """Helper to get header value ignoring case."""
         return get_header(headers, key)
 
     @staticmethod
-    def _parse_number(value: Optional[str]) -> Optional[float]:
+    def _parse_number(value: str | None) -> float | None:
         if value is None:
             return None
         try:
@@ -99,7 +100,7 @@ class RateLimitMiddleware(RotatorMiddleware):
             return None
 
     @classmethod
-    def _to_reset_timestamp(cls, value: float, now: Optional[float] = None) -> float:
+    def _to_reset_timestamp(cls, value: float, now: float | None = None) -> float:
         """Normalizes a reset value (delta seconds or UNIX timestamp) to a UNIX timestamp."""
         if now is None:
             now = time.time()
@@ -107,29 +108,24 @@ class RateLimitMiddleware(RotatorMiddleware):
             return now + max(0.0, value)
         return value
 
-    def _extract_rate_limit_info(self, headers: Dict[str, str]) -> Dict[str, Any]:
-        """Extract rate limit information from response headers."""
-        rate_limit_info: Dict[str, Any] = {}
+    def _extract_rate_limit_info(self, headers: dict[str, str]) -> dict[str, Any]:
+        """Extract rate limit information from response headers (single pass)."""
+        rate_limit_info: dict[str, Any] = {}
+        limit_raw, remaining_raw, reset_raw = rate_limit_header_values(headers)
 
-        for prefix in ('X-RateLimit-', 'RateLimit-'):
-            if 'limit' not in rate_limit_info:
-                limit = self._parse_number(self._get_header_nocase(headers, prefix + 'Limit'))
-                if limit is not None:
-                    rate_limit_info['limit'] = int(limit)
-
-            if 'remaining' not in rate_limit_info:
-                remaining = self._parse_number(self._get_header_nocase(headers, prefix + 'Remaining'))
-                if remaining is not None:
-                    rate_limit_info['remaining'] = int(remaining)
-
-            if 'reset_time' not in rate_limit_info:
-                reset = self._parse_number(self._get_header_nocase(headers, prefix + 'Reset'))
-                if reset is not None:
-                    rate_limit_info['reset_time'] = self._to_reset_timestamp(reset)
+        limit = self._parse_number(limit_raw)
+        if limit is not None:
+            rate_limit_info['limit'] = int(limit)
+        remaining = self._parse_number(remaining_raw)
+        if remaining is not None:
+            rate_limit_info['remaining'] = int(remaining)
+        reset = self._parse_number(reset_raw)
+        if reset is not None:
+            rate_limit_info['reset_time'] = self._to_reset_timestamp(reset)
 
         return rate_limit_info
 
-    def _store_rate_limit_info(self, key: str, rate_limit_info: Dict[str, Any]) -> None:
+    def _store_rate_limit_info(self, key: str, rate_limit_info: dict[str, Any]) -> None:
         """Store rate limit info for a key."""
         if rate_limit_info:
             with self._lock:
@@ -262,7 +258,7 @@ class RateLimitMiddleware(RotatorMiddleware):
         """Async hook: handles rate limit errors."""
         return self._handle_error(error_info)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Returns statistics about tracked rate limits.
         """

@@ -80,12 +80,26 @@ APIKeyRotator(
 | `max_delay`              | `float`                                          | `60.0`                  | Upper bound for any single backoff / rate-limit wait (seconds).                       |
 | `pool_size`              | `int`                                            | `100`                   | Size of the HTTP connection pool (requests adapter / aiohttp connector limit).        |
 | `recovery_timeout`       | `Optional[float]`                                | `None` (strategy: 60s)  | Seconds after the last failure when an unhealthy key is probed again.                 |
+| `total_timeout`          | `float \| None`                                  | `None`                  | Time budget of one request incl. retries/waits (overridable per request). Raises `DeadlineExceededError`. |
+| `retry_non_idempotent`   | `bool`                                           | `False`                 | Retry POST/PATCH after errors where the request may have been processed.              |
+| `circuit_breaker`        | `bool \| CircuitBreakerConfig \| None`           | `None`                  | Per-host circuit breaker; raises `CircuitOpenError` while open.                       |
+| `key_rate_limit`         | `tuple[int, float] \| None`                      | `None`                  | Client-side token bucket per key: `(requests, per_seconds)`.                          |
+| `respect_rate_limit_headers` | `bool`                                       | `True`                  | Park a key reporting `X-RateLimit-Remaining: 0` until its reset.                      |
+| `state_backend`          | `StateBackend \| None`                           | `None`                  | Shared state (`RedisStateBackend`, `InMemoryStateBackend`).                           |
+| `state_sync_interval`    | `float`                                          | `1.0`                   | How often shared state is pulled (seconds).                                           |
+| `auto_refresh_interval`  | `float \| None`                                  | `None`                  | Reload keys from `secret_provider` every N seconds in the background.                 |
+| `http_backend`           | `str`                                            | `"requests"` / `"aiohttp"` | `"httpx"` for either rotator (keyword-only).                                       |
+| `http2`                  | `bool`                                           | `False`                 | HTTP/2 (httpx backend only).                                                          |
+| `http_client_kwargs`     | `dict \| None`                                   | `None`                  | Extra HTTP client settings (e.g. `verify`, `cert`, custom transport).                 |
+
+See [Resilience & Scaling](RESILIENCE.md) for details and examples.
 
 **Retry behaviour (0.7.0):**
 - `429` — the key is marked rate-limited until `Retry-After` expires and the next available key is used **immediately**; the rotator waits only when every key is rate-limited (until the earliest one frees up, capped by `max_delay`).
 - `5xx` / network errors — exponential backoff (`Retry-After` is honoured for `5xx`), capped by `max_delay`.
 - `401` / `403` — the key is removed and the request is retried with another key.
 - Other `4xx` (`400`, `404`, `422`, ...) — the response is returned to the caller; no retry, the key is kept.
+- `POST` / `PATCH` (0.8.0) — not retried after `500`/`502`/`504` or read timeouts unless `retry_non_idempotent=True` or an `Idempotency-Key` header is sent.
 - When all attempts fail `AllKeysExhaustedError` is raised; it carries `last_response` / `last_exception`.
 - `weighted` strategy by name: pass weights via `rotation_strategy_kwargs={"weights": {"key1": 3, "key2": 1}}` (missing keys default to `1.0`).
 

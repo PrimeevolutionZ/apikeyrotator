@@ -3,7 +3,7 @@ LRU (Least Recently Used) rotation strategy
 """
 
 import time
-from typing import List, Dict, Optional
+
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -22,7 +22,7 @@ class LRURotationStrategy(BaseRotationStrategy):
         >>> strategy.get_next_key()  # Returns key with smallest last_used
     """
 
-    def __init__(self, keys: List[str]):
+    def __init__(self, keys: list[str]):
         """
         Initializes LRU strategy.
 
@@ -30,14 +30,13 @@ class LRURotationStrategy(BaseRotationStrategy):
             keys: List of API keys for rotation
         """
         super().__init__(keys)
-        # Create metrics to track usage time
-        self._key_metrics: Dict[str, KeyMetrics] = {
-            key: KeyMetrics(key) for key in keys
-        }
+        # Time each key was last handed out by this strategy (a float per key
+        # instead of a full KeyMetrics object - usage stats live in the rotator)
+        self._last_selected: dict[str, float] = {}
 
     def get_next_key(
             self,
-            current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
+            current_key_metrics: dict[str, KeyMetrics] | None = None
     ) -> str:
         """
         Selects the least recently used healthy key.
@@ -56,7 +55,7 @@ class LRURotationStrategy(BaseRotationStrategy):
             if not self._keys:
                 raise ValueError("No keys available in rotation")
 
-            own_metrics = self._key_metrics
+            selected_get = self._last_selected.get
             now = time.time()
             recovery_timeout = self.recovery_timeout
             available = self._key_available
@@ -67,8 +66,7 @@ class LRURotationStrategy(BaseRotationStrategy):
             best_key = best_any = None
             best_ts = best_any_ts = float('inf')
             for k in self._keys:
-                own = own_metrics.get(k)
-                ts = own.last_used if own is not None else 0.0
+                ts = selected_get(k, 0.0)
                 ext = ext_get(k) if ext_get is not None else None
                 if ext is not None and ext.last_used > ts:
                     ts = ext.last_used
@@ -80,23 +78,13 @@ class LRURotationStrategy(BaseRotationStrategy):
 
             # Mark as used in internal state only - external metrics are owned
             # (and updated) by the rotator itself.
-            own = self._key_metrics.get(lru_key)
-            if own is None:
-                own = self._key_metrics[lru_key] = KeyMetrics(lru_key)
-            own.last_used = time.time()
+            self._last_selected[lru_key] = now
 
         return lru_key
 
-    def update_keys(self, new_keys: List[str]) -> None:
-        """Updates keys, adding metrics for new keys and removing stale ones."""
+    def update_keys(self, new_keys: list[str]) -> None:
+        """Updates keys, forgetting selection times of removed keys."""
         with self._lock:
             self._keys = list(new_keys)
             new_set = set(new_keys)
-            # Remove metrics for removed keys
-            for key in list(self._key_metrics.keys()):
-                if key not in new_set:
-                    del self._key_metrics[key]
-            # Add metrics for new keys
-            for key in new_keys:
-                if key not in self._key_metrics:
-                    self._key_metrics[key] = KeyMetrics(key)
+            self._last_selected = {k: v for k, v in self._last_selected.items() if k in new_set}

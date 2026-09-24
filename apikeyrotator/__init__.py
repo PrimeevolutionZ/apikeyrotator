@@ -7,77 +7,94 @@ Easy-to-use yet feature-rich API key rotator with support for:
 - Middleware system
 - Metrics and monitoring
 - Automatic retry and error handling
+- Circuit breaker, request deadlines, client-side key rate limits
+- Shared state between processes (Redis)
+- requests / aiohttp / httpx (HTTP/2) transports
 """
+
+import logging as _logging
+
+
+# Libraries must not configure logging output themselves: attach a NullHandler so
+# nothing is printed unless the application configures logging (logging.basicConfig()).
+_logging.getLogger(__name__).addHandler(_logging.NullHandler())
 
 # Core
 from .core import (
     APIKeyRotator,
     AsyncAPIKeyRotator,
-    parse_keys,
     ConfigLoader,
+    parse_keys,
 )
-
 from .core.exceptions import (
-    APIKeyError,
-    NoAPIKeysError,
     AllKeysExhaustedError,
     AllProvidersExhaustedError,
+    APIKeyError,
+    CircuitOpenError,
+    DeadlineExceededError,
     HTTPStatusError,
+    NoAPIKeysError,
 )
 
-# Strategies
-from .strategies import (
-    RotationStrategy,
-    create_rotation_strategy,
-    BaseRotationStrategy,
-    RoundRobinRotationStrategy,
-    RandomRotationStrategy,
-    WeightedRotationStrategy,
-    LRURotationStrategy,
-    HealthBasedStrategy,
-    KeyMetrics,
+# Metrics
+from .metrics import (
+    EndpointStats,
+    PrometheusExporter,
+    RotatorMetrics,
+)
+
+# Middleware
+from .middleware import (
+    CachingMiddleware,
+    ErrorInfo,
+    LoggingMiddleware,
+    RateLimitMiddleware,
+    RequestInfo,
+    ResponseInfo,
+    RotatorMiddleware,
+)
+
+# Providers
+from .providers import (
+    AWSSecretsManagerProvider,
+    EnvironmentSecretProvider,
+    FileSecretProvider,
+    GCPSecretManagerProvider,
+    SecretProvider,
+    create_secret_provider,
 )
 
 # Router
 from .router import FallbackRouter, ProviderRoute
 
-# Providers
-from .providers import (
-    SecretProvider,
-    create_secret_provider,
-    EnvironmentSecretProvider,
-    FileSecretProvider,
-    AWSSecretsManagerProvider,
-    GCPSecretManagerProvider,
-)
+# Shared state
+from .state import InMemoryStateBackend, RedisStateBackend, StateBackend
 
-# Middleware
-from .middleware import (
-    RotatorMiddleware,
-    RequestInfo,
-    ResponseInfo,
-    ErrorInfo,
-    LoggingMiddleware,
-    CachingMiddleware,
-    RateLimitMiddleware,
-)
-
-# Metrics
-from .metrics import (
-    RotatorMetrics,
-    EndpointStats,
-    PrometheusExporter,
+# Strategies
+from .strategies import (
+    BaseRotationStrategy,
+    HealthBasedStrategy,
+    KeyMetrics,
+    LRURotationStrategy,
+    RandomRotationStrategy,
+    RotationStrategy,
+    RoundRobinRotationStrategy,
+    WeightedRotationStrategy,
+    create_rotation_strategy,
 )
 
 # Utils
 from .utils import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
     ErrorClassifier,
     ErrorType,
-    retry_with_backoff,
     async_retry_with_backoff,
+    retry_with_backoff,
 )
 
-__version__ = "0.7.0"
+
+__version__ = "0.8.0"
 __author__ = "Prime Evolution"
 
 __all__ = [
@@ -89,6 +106,8 @@ __all__ = [
     "AllKeysExhaustedError",
     "AllProvidersExhaustedError",
     "HTTPStatusError",
+    "DeadlineExceededError",
+    "CircuitOpenError",
     "parse_keys",
     "ConfigLoader",
 
@@ -124,12 +143,19 @@ __all__ = [
     "FallbackRouter",
     "ProviderRoute",
 
+    # Shared state
+    "StateBackend",
+    "InMemoryStateBackend",
+    "RedisStateBackend",
+
     # Metrics
     "RotatorMetrics",
     "EndpointStats",
     "PrometheusExporter",
 
     # Utils
+    "CircuitBreaker",
+    "CircuitBreakerConfig",
     "ErrorClassifier",
     "ErrorType",
     "retry_with_backoff",

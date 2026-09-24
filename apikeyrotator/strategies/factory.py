@@ -2,18 +2,18 @@
 Factory for creating rotation strategies
 """
 
-from typing import Union, List, Dict
+
 from .base import BaseRotationStrategy, RotationStrategy
-from .round_robin import RoundRobinRotationStrategy
-from .random import RandomRotationStrategy
-from .weighted import WeightedRotationStrategy
-from .lru import LRURotationStrategy
 from .health_based import HealthBasedStrategy
+from .lru import LRURotationStrategy
+from .random import RandomRotationStrategy
+from .round_robin import RoundRobinRotationStrategy
+from .weighted import WeightedRotationStrategy
 
 
 def create_rotation_strategy(
-        strategy_type: Union[str, RotationStrategy],
-        keys: Union[List[str], Dict[str, float]],
+        strategy_type: str | RotationStrategy,
+        keys: list[str] | dict[str, float],
         **kwargs
 ) -> BaseRotationStrategy:
     """

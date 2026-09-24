@@ -1,9 +1,15 @@
-import logging
 import inspect
-from typing import List, Optional, Callable, Any, Dict, Tuple
+import logging
+from collections.abc import Callable
+from typing import Any
 
-from .core.rotator import BaseKeyRotator, APIKeyRotator, AsyncAPIKeyRotator
-from .core.exceptions import AllKeysExhaustedError, AllProvidersExhaustedError
+from .core.exceptions import (
+    AllKeysExhaustedError,
+    AllProvidersExhaustedError,
+    DeadlineExceededError,
+)
+from .core.rotator import APIKeyRotator, AsyncAPIKeyRotator, BaseKeyRotator
+
 
 class ProviderRoute:
     """
@@ -13,9 +19,9 @@ class ProviderRoute:
         self,
         rotator: BaseKeyRotator,
         name: str = "default",
-        request_transformer: Optional[Callable[[str, str, Dict[str, Any]], Tuple[str, str, Dict[str, Any]]]] = None,
-        condition: Optional[Callable[[str, str, Dict[str, Any]], bool]] = None,
-        on_exhausted: Optional[Callable[[], Any]] = None
+        request_transformer: Callable[[str, str, dict[str, Any]], tuple[str, str, dict[str, Any]]] | None = None,
+        condition: Callable[[str, str, dict[str, Any]], bool] | None = None,
+        on_exhausted: Callable[[], Any] | None = None
     ):
         """
         Args:
@@ -40,9 +46,9 @@ class FallbackRouter:
     """
     def __init__(
         self,
-        routes: List[ProviderRoute],
-        on_all_exhausted: Optional[Callable[[str, str, Dict[str, Any]], Any]] = None,
-        logger: Optional[logging.Logger] = None
+        routes: list[ProviderRoute],
+        on_all_exhausted: Callable[[str, str, dict[str, Any]], Any] | None = None,
+        logger: logging.Logger | None = None
     ):
         """
         Args:
@@ -74,6 +80,8 @@ class FallbackRouter:
             try:
                 self.logger.info(f"Routing request to provider: {route.name}")
                 return route.rotator.request(req_method, req_url, **req_kwargs)
+            except DeadlineExceededError:
+                raise  # the caller's time budget is spent - don't try other providers
             except AllKeysExhaustedError:
                 self.logger.warning(f"Provider '{route.name}' exhausted all keys. Moving to next route.")
                 if route.on_exhausted:
@@ -118,6 +126,8 @@ class FallbackRouter:
             try:
                 self.logger.info(f"Routing async request to provider: {route.name}")
                 return await route.rotator.request(req_method, req_url, **req_kwargs)
+            except DeadlineExceededError:
+                raise  # the caller's time budget is spent - don't try other providers
             except AllKeysExhaustedError:
                 self.logger.warning(f"Provider '{route.name}' exhausted all keys. Moving to next route.")
                 if route.on_exhausted:

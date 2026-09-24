@@ -5,28 +5,29 @@ of the rotator core.
 
 import os
 import sys
-import time
 import threading
+import time
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
 
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from apikeyrotator import (
-    APIKeyRotator,
-    AsyncAPIKeyRotator,
     AllKeysExhaustedError,
     AllProvidersExhaustedError,
-    FallbackRouter,
-    ProviderRoute,
+    APIKeyRotator,
+    AsyncAPIKeyRotator,
     ErrorClassifier,
+    FallbackRouter,
     KeyMetrics,
+    ProviderRoute,
     RotatorMetrics,
     WeightedRotationStrategy,
 )
-from apikeyrotator.strategies import RoundRobinRotationStrategy, LRURotationStrategy
+from apikeyrotator.strategies import LRURotationStrategy, RoundRobinRotationStrategy
 
 
 def resp(status=200, headers=None, content=b''):

@@ -4,9 +4,9 @@ Middleware for logging
 import logging
 import threading
 import time
-from typing import Optional
+
 from .base import RotatorMiddleware
-from .models import RequestInfo, ResponseInfo, ErrorInfo
+from .models import ErrorInfo, RequestInfo, ResponseInfo
 
 
 class LoggingMiddleware(RotatorMiddleware):
@@ -18,7 +18,7 @@ class LoggingMiddleware(RotatorMiddleware):
     def __init__(
         self,
         verbose: bool = True,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
         log_level: int = logging.INFO,
         log_response_time: bool = True,
         max_key_chars: int = 4,
@@ -32,16 +32,10 @@ class LoggingMiddleware(RotatorMiddleware):
         if logger:
             self.logger = logger
         else:
+            # No handler is attached here: the application decides where logs go
+            # (e.g. logging.basicConfig()). The level only applies to our own logger.
             self.logger = logging.getLogger(__name__)
-            if not self.logger.handlers:
-                handler = logging.StreamHandler()
-                formatter = logging.Formatter(
-                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                )
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
-
-        self.logger.setLevel(log_level)
+            self.logger.setLevel(log_level)
 
         self._last_log_reset = time.time()
         self._log_count = 0

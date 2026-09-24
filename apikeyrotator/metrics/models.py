@@ -1,7 +1,7 @@
 """Data models for metrics"""
 
 import threading
-from typing import Dict, Any
+from typing import Any
 
 
 class KeyStats:
@@ -19,7 +19,7 @@ class KeyStats:
         self.rate_limit_hits = 0
         self.is_healthy = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "total_requests": self.total_requests,
             "successful_requests": self.successful_requests,
@@ -34,7 +34,7 @@ class KeyStats:
         }
 
     @staticmethod
-    def from_dict(data: Dict[str, Any]) -> 'KeyStats':
+    def from_dict(data: dict[str, Any]) -> 'KeyStats':
         stats = KeyStats()
         for field, value in data.items():
             if hasattr(stats, field):
@@ -48,14 +48,16 @@ class EndpointStats:
     Thread-safe version.
     """
 
+    __slots__ = ("total_requests", "successful_requests", "failed_requests", "avg_response_time", "_lock")
+
     def __init__(self):
         self.total_requests = 0
         self.successful_requests = 0
         self.failed_requests = 0
         self.avg_response_time = 0.0
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialization to dictionary (thread-safe)"""
         with self._lock:
             return {
@@ -66,7 +68,7 @@ class EndpointStats:
             }
 
     @staticmethod
-    def from_dict(data: Dict[str, Any]) -> 'EndpointStats':
+    def from_dict(data: dict[str, Any]) -> 'EndpointStats':
         """Deserialization from dictionary"""
         stats = EndpointStats()
         for field, value in data.items():
@@ -83,13 +85,13 @@ class EndpointStats:
             response_time: Execution time
         """
         with self._lock:
-            self.total_requests += 1
-            if success:
-                self.successful_requests += 1
-            else:
-                self.failed_requests += 1
+            self._update_unlocked(success, response_time)
 
-            if self.total_requests > 0:
-                self.avg_response_time = (
-                    self.avg_response_time * (self.total_requests - 1) + response_time
-                ) / self.total_requests
+    def _update_unlocked(self, success: bool, response_time: float) -> None:
+        """Update without taking the lock - caller must hold a lock covering this object."""
+        self.total_requests += 1
+        if success:
+            self.successful_requests += 1
+        else:
+            self.failed_requests += 1
+        self.avg_response_time += (response_time - self.avg_response_time) / self.total_requests

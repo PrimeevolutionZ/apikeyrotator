@@ -4,25 +4,27 @@ Tests: CachingMiddleware, LoggingMiddleware, RateLimitMiddleware and their
 integration with the sync/async rotators.
 """
 
-import pytest
+import logging
 import os
 import sys
 import time
-import logging
+
+import pytest
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from apikeyrotator import APIKeyRotator, AsyncAPIKeyRotator
 from apikeyrotator.middleware import (
-    RequestInfo,
-    ResponseInfo,
-    ErrorInfo,
-    RotatorMiddleware,
     CachingMiddleware,
+    ErrorInfo,
     LoggingMiddleware,
     RateLimitMiddleware,
+    RequestInfo,
+    ResponseInfo,
+    RotatorMiddleware,
 )
 
 

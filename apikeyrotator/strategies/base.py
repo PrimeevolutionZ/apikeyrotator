@@ -2,12 +2,13 @@
 Base classes for key rotation strategies
 """
 
-from enum import Enum
-from typing import List, Dict, Any, Optional, Union
-from abc import ABC, abstractmethod
-import time
-import threading
 import logging
+import threading
+import time
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Any
+
 
 class RotationStrategy(Enum):
     """Enumeration of available rotation strategies"""
@@ -20,10 +21,24 @@ class RotationStrategy(Enum):
     RATE_LIMIT_AWARE = "rate_limit_aware"
 
 
+# Lock striping: KeyMetrics instances share a small pool of locks instead of owning
+# one each - saves memory with thousands of keys; contention is negligible because
+# the critical sections are a few attribute updates.
+_LOCK_STRIPES = 64
+_LOCKS = tuple(threading.Lock() for _ in range(_LOCK_STRIPES))
+
+
 class KeyMetrics:
     """
     Metrics for a single API key.
     """
+
+    __slots__ = (
+        "key", "total_requests", "successful_requests", "failed_requests",
+        "avg_response_time", "last_used", "last_success", "last_failure",
+        "consecutive_failures", "rate_limit_hits", "is_healthy", "success_rate",
+        "rate_limit_reset", "requests_remaining", "_ewma_alpha", "_response_samples", "_lock",
+    )
 
     def __init__(self, key: str, ewma_alpha: float = 0.1):
         """
@@ -55,10 +70,10 @@ class KeyMetrics:
         # Number of samples used for avg_response_time
         self._response_samples = 0
 
-        # Thread-safety
-        self._lock = threading.RLock()
+        # Thread-safety (shared striped lock, non-reentrant)
+        self._lock = _LOCKS[hash(key) % _LOCK_STRIPES]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialization of metrics to dictionary (thread-safe)"""
         with self._lock:
             return {
@@ -79,7 +94,7 @@ class KeyMetrics:
             }
 
     @staticmethod
-    def from_dict(data: Dict[str, Any]) -> 'KeyMetrics':
+    def from_dict(data: dict[str, Any]) -> 'KeyMetrics':
         """Deserialization of metrics from dictionary"""
         metrics = KeyMetrics(data["key"])
         for field, value in data.items():
@@ -103,24 +118,23 @@ class KeyMetrics:
             is_rate_limited: Whether rate limit was hit
             **kwargs: Additional parameters (rate_limit_reset, requests_remaining)
         """
+        now = time.time()
         with self._lock:
             self.total_requests += 1
-            self.last_used = time.time()
+            self.last_used = now
+            alpha = self._ewma_alpha
 
+            # EWMA: new_value = (1 - alpha) * old_value + alpha * new_observation
             if success:
                 self.successful_requests += 1
-                self.last_success = time.time()
+                self.last_success = now
                 self.consecutive_failures = 0
-
-                # new_value = (1 - alpha) * old_value + alpha * new_observation
-                self.success_rate = (1 - self._ewma_alpha) * self.success_rate + self._ewma_alpha * 1.0
+                self.success_rate = (1 - alpha) * self.success_rate + alpha
             else:
                 self.failed_requests += 1
-                self.last_failure = time.time()
+                self.last_failure = now
                 self.consecutive_failures += 1
-
-                # FIXED: Correct EWMA formula for failure
-                self.success_rate = (1 - self._ewma_alpha) * self.success_rate + self._ewma_alpha * 0.0
+                self.success_rate = (1 - alpha) * self.success_rate
 
             # Update average response time (cumulative average over timed samples only,
             # so requests without timing information don't drag the average down)
@@ -166,7 +180,7 @@ class KeyMetrics:
                 self.rate_limit_reset = until
             self.requests_remaining = 0
 
-    def is_available(self, now: Optional[float] = None, recovery_timeout: Optional[float] = None) -> bool:
+    def is_available(self, now: float | None = None, recovery_timeout: float | None = None) -> bool:
         """
         Whether the key can be used right now.
 
@@ -243,9 +257,9 @@ class BaseRotationStrategy(ABC):
                           given another chance (probe). Set to None to disable.
     """
 
-    recovery_timeout: Optional[float] = 60.0
+    recovery_timeout: float | None = 60.0
 
-    def __init__(self, keys: Union[List[str], Dict[str, float]]):
+    def __init__(self, keys: list[str] | dict[str, float]):
         """
         Args:
             keys: List of keys or dict {key: weight} for weighted strategies
@@ -272,7 +286,7 @@ class BaseRotationStrategy(ABC):
     @abstractmethod
     def get_next_key(
             self,
-            current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
+            current_key_metrics: dict[str, KeyMetrics] | None = None
     ) -> str:
         """
         Selects the next key to use.
@@ -288,7 +302,13 @@ class BaseRotationStrategy(ABC):
         """
         raise NotImplementedError
 
-    def update_keys(self, new_keys: List[str]) -> None:
+    def use_external_metrics(self) -> None:
+        """
+        Called by the rotator: it owns per-key metrics and passes them to every
+        get_next_key() call, so strategies can free internal per-key copies.
+        """
+
+    def update_keys(self, new_keys: list[str]) -> None:
         """
         Updates the list of available keys (e.g., after key removal).
 
@@ -321,8 +341,8 @@ class BaseRotationStrategy(ABC):
 
     def _get_healthy_keys(
         self,
-        current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
-    ) -> List[str]:
+        current_key_metrics: dict[str, KeyMetrics] | None = None
+    ) -> list[str]:
         """
         Returns list of healthy keys.
 
@@ -348,6 +368,6 @@ class BaseRotationStrategy(ABC):
         return healthy if healthy else keys
 
     @staticmethod
-    def _key_available(metrics: Optional[KeyMetrics], now: float, recovery_timeout: Optional[float]) -> bool:
+    def _key_available(metrics: KeyMetrics | None, now: float, recovery_timeout: float | None) -> bool:
         """Availability check that treats keys without metrics as available."""
         return metrics is None or metrics.is_available(now, recovery_timeout)

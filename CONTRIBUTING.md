@@ -28,7 +28,7 @@ By participating in this project, you agree to abide by our Code of Conduct:
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.12 or higher
 - Git
 - GitHub account
 - Familiarity with Python and async programming
@@ -125,7 +125,7 @@ What actually happened.
 
 **Environment:**
 - OS: [e.g., Windows 11, Ubuntu 22.04]
-- Python version: [e.g., 3.9.7]
+- Python version: [e.g., 3.12.3]
 - APIKeyRotator version: [e.g., 0.4.1]
 - Dependencies: [e.g., requests 2.28.0]
 

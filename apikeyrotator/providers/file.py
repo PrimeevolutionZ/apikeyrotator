@@ -1,10 +1,9 @@
 """Secret provider from file"""
 
-import os
-import json
 import asyncio
+import json
 import logging
-from typing import List, Optional
+import os
 
 
 class FileSecretProvider:
@@ -17,15 +16,15 @@ class FileSecretProvider:
     - One key per line
     """
 
-    def __init__(self, file_path: str, logger: Optional[logging.Logger] = None):
+    def __init__(self, file_path: str, logger: logging.Logger | None = None):
         self.file_path = file_path
         self.logger = logger if logger else logging.getLogger(__name__)
 
     def _read_file(self) -> str:
-        with open(self.file_path, 'r', encoding='utf-8') as f:
+        with open(self.file_path, encoding='utf-8') as f:
             return f.read()
 
-    async def get_keys(self) -> List[str]:
+    async def get_keys(self) -> list[str]:
         if not os.path.exists(self.file_path):
             self.logger.warning(f"Keys file {self.file_path} does not exist")
             return []
@@ -55,5 +54,5 @@ class FileSecretProvider:
             self.logger.error(f"Error reading keys from {self.file_path}: {e}")
             return []
 
-    async def refresh_keys(self) -> List[str]:
+    async def refresh_keys(self) -> list[str]:
         return await self.get_keys()

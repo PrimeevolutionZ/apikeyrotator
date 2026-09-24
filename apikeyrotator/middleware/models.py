@@ -1,20 +1,22 @@
 """Data models for middleware"""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class RequestInfo:
     """Information about an HTTP request"""
 
+    __slots__ = ("method", "url", "headers", "cookies", "key", "attempt", "kwargs")
+
     def __init__(
             self,
             method: str,
             url: str,
-            headers: Dict[str, str],
-            cookies: Dict[str, str],
+            headers: dict[str, str],
+            cookies: dict[str, str],
             key: str,
             attempt: int,
-            kwargs: Dict[str, Any]
+            kwargs: dict[str, Any]
     ):
         self.method = method
         self.url = url
@@ -28,13 +30,15 @@ class RequestInfo:
 class ResponseInfo:
     """Information about an HTTP response"""
 
+    __slots__ = ("status_code", "headers", "content", "request_info", "response_time")
+
     def __init__(
             self,
             status_code: int,
-            headers: Dict[str, str],
+            headers: dict[str, str],
             content: Any,
             request_info: RequestInfo,
-            response_time: Optional[float] = None
+            response_time: float | None = None
     ):
         self.status_code = status_code
         self.headers = headers
@@ -46,11 +50,13 @@ class ResponseInfo:
 class ErrorInfo:
     """Information about an error"""
 
+    __slots__ = ("exception", "request_info", "response_info")
+
     def __init__(
             self,
             exception: Exception,
             request_info: RequestInfo,
-            response_info: Optional[ResponseInfo] = None
+            response_info: ResponseInfo | None = None
     ):
         self.exception = exception
         self.request_info = request_info

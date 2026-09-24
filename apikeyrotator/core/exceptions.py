@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 
 class APIKeyError(Exception):
@@ -23,8 +23,8 @@ class AllKeysExhaustedError(APIKeyError):
     def __init__(
             self,
             message: str = "",
-            last_response: Optional[Any] = None,
-            last_exception: Optional[BaseException] = None,
+            last_response: Any | None = None,
+            last_exception: BaseException | None = None,
     ):
         super().__init__(message)
         self.last_response = last_response
@@ -45,3 +45,32 @@ class HTTPStatusError(APIKeyError):
     def __init__(self, status_code: int, message: str = ""):
         super().__init__(message or f"HTTP {status_code}")
         self.status_code = status_code
+
+
+class DeadlineExceededError(AllKeysExhaustedError, TimeoutError):
+    """
+    The request's total time budget (``total_timeout``) ran out, including
+    all retries and waits. Also a ``TimeoutError``.
+
+    FallbackRouter does not fall back to other providers on this error - the
+    caller's deadline is already spent.
+    """
+
+
+class CircuitOpenError(AllKeysExhaustedError):
+    """
+    The circuit breaker for the target host is open: the host failed repeatedly,
+    so requests fail fast without touching the network until ``retry_after``
+    seconds have passed. FallbackRouter treats it like an exhausted provider.
+
+    Attributes:
+        host: Host whose circuit is open.
+        retry_after: Seconds until a probe request will be allowed.
+    """
+
+    def __init__(self, host: str, retry_after: float, **kwargs):
+        super().__init__(
+            f"Circuit breaker open for {host}; retry in {retry_after:.1f}s", **kwargs
+        )
+        self.host = host
+        self.retry_after = retry_after

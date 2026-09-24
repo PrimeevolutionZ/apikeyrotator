@@ -1,8 +1,7 @@
-import os
 import json
-import yaml
-from typing import Dict, Any, Optional
 import logging
+import os
+from typing import Any
 
 
 class ConfigLoader:
@@ -18,7 +17,7 @@ class ConfigLoader:
         config (Dict[str, Any]): Loaded configuration
     """
 
-    def __init__(self, config_file: str, logger: Optional[logging.Logger] = None):
+    def __init__(self, config_file: str, logger: logging.Logger | None = None):
         """
         Initializes the configuration loader.
 
@@ -28,9 +27,9 @@ class ConfigLoader:
         """
         self.config_file = config_file
         self.logger = logger
-        self.config: Dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
 
-    def load_config(self) -> Dict[str, Any]:
+    def load_config(self) -> dict[str, Any]:
         """
         Loads configuration from file.
 
@@ -52,10 +51,12 @@ class ConfigLoader:
         ext = ext.lower()
 
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
+            with open(self.config_file, encoding='utf-8') as f:
                 if ext == '.json':
                     self.config = json.load(f)
                 elif ext in ('.yaml', '.yml'):
+                    import yaml  # lazy: only needed for YAML configs
+
                     self.config = yaml.safe_load(f) or {}
                 else:
                     raise ValueError(f"Unsupported config file format: {ext}. Only .json, .yaml, .yml are supported.")
@@ -81,7 +82,7 @@ class ConfigLoader:
         """
         return self.config.get(key, default)
 
-    def save_config(self, config: Optional[Dict[str, Any]] = None):
+    def save_config(self, config: dict[str, Any] | None = None):
         """
         Saves the configuration to a file.
 
@@ -105,6 +106,8 @@ class ConfigLoader:
                 if ext == '.json':
                     json.dump(self.config, f, indent=4, ensure_ascii=False)
                 elif ext in ('.yaml', '.yml'):
+                    import yaml  # lazy: only needed for YAML configs
+
                     yaml.safe_dump(self.config, f, indent=4, allow_unicode=True)
                 else:
                     raise ValueError(f"Unsupported config file format: {ext}. Only .json, .yaml, .yml are supported.")
@@ -116,7 +119,7 @@ class ConfigLoader:
                 self.logger.error(f"Error saving config to {self.config_file}: {e}")
             raise
 
-    def update_config(self, new_data: Dict[str, Any]):
+    def update_config(self, new_data: dict[str, Any]):
         """
         Updates the configuration with new data and saves it to file.
 

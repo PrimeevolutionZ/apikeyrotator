@@ -3,41 +3,39 @@ Integration tests for APIKeyRotator
 Tests: real-world scenarios, middleware, strategies, metrics
 """
 
-import pytest
 import os
 import sys
 import time
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from apikeyrotator import (
     APIKeyRotator,
     AsyncAPIKeyRotator,
-    AllKeysExhaustedError,
-)
-from apikeyrotator.strategies import (
-    RoundRobinRotationStrategy,
-    RandomRotationStrategy,
-    WeightedRotationStrategy,
-    LRURotationStrategy,
-    HealthBasedStrategy,
 )
 from apikeyrotator.middleware import (
-    LoggingMiddleware,
     CachingMiddleware,
+    LoggingMiddleware,
     RateLimitMiddleware,
 )
+from apikeyrotator.strategies import (
+    LRURotationStrategy,
+)
+
 
 # Check optional dependencies
 try:
-    import requests
+    import requests  # noqa: F401
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
 
 try:
-    import aiohttp
+    import aiohttp  # noqa: F401
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False
@@ -129,6 +127,7 @@ class TestRotationStrategies:
             api_keys=['key1', 'key2', 'key3'],
             rotation_strategy='health_based',
             rotation_strategy_kwargs={'failure_threshold': 2},
+            base_delay=0.01,
             load_env_file=False
         )
 
@@ -142,7 +141,7 @@ class TestRotationStrategies:
 
             try:
                 rotator.get('http://example.com')
-            except:
+            except Exception:
                 pass
 
             # Mark key1 as unhealthy
@@ -334,6 +333,7 @@ class TestMetrics:
             api_keys=['key1'],
             enable_metrics=True,
             max_retries=2,
+            base_delay=0.01,
             load_env_file=False
         )
 
@@ -342,7 +342,7 @@ class TestMetrics:
 
             try:
                 rotator.get('http://example.com')
-            except:
+            except Exception:
                 pass
 
             metrics = rotator.get_metrics()
@@ -405,6 +405,7 @@ class TestErrorHandling:
         rotator = APIKeyRotator(
             api_keys=['key1'],
             max_retries=3,
+            base_delay=0.01,
             load_env_file=False
         )
 

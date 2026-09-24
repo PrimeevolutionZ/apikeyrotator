@@ -1,7 +1,8 @@
 """Metric exporters to various formats"""
 
+from typing import Any
+
 from .collector import RotatorMetrics
-from typing import Optional, Dict, Any, List, Tuple
 
 
 def _escape_label(value: str) -> str:
@@ -18,8 +19,8 @@ class PrometheusExporter:
 
     @staticmethod
     def _family(
-            output: List[str], name: str, help_text: str, metric_type: str,
-            samples: List[Tuple[str, Any]]
+            output: list[str], name: str, help_text: str, metric_type: str,
+            samples: list[tuple[str, Any]]
     ) -> None:
         """Appends one metric family (HELP/TYPE emitted exactly once)."""
         if not samples:
@@ -30,7 +31,7 @@ class PrometheusExporter:
             output.append(f"{name}{labels} {value}")
 
     @staticmethod
-    def export(metrics: RotatorMetrics, key_metrics: Optional[Dict[str, Any]] = None) -> str:
+    def export(metrics: RotatorMetrics, key_metrics: dict[str, Any] | None = None) -> str:
         """
         Exports metrics in Prometheus format.
 
@@ -41,7 +42,7 @@ class PrometheusExporter:
         Returns:
             str: Metrics in Prometheus format
         """
-        output: List[str] = []
+        output: list[str] = []
         family = PrometheusExporter._family
 
         snapshot = metrics.get_metrics()

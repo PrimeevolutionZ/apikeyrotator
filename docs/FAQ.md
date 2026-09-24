@@ -34,7 +34,7 @@ Yes! APIKeyRotator is open-source and distributed under the MIT License. You can
 
 ### What Python versions are supported?
 
-APIKeyRotator supports Python 3.9 and higher.
+APIKeyRotator supports Python 3.12 and higher (since 0.8.0).
 
 ---
 

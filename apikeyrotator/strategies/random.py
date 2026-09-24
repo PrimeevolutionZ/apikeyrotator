@@ -4,7 +4,7 @@ Random rotation strategy
 
 import random
 import time
-from typing import List, Dict, Optional
+
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -22,7 +22,7 @@ class RandomRotationStrategy(BaseRotationStrategy):
 
     _PROBES = 4
 
-    def __init__(self, keys: List[str]):
+    def __init__(self, keys: list[str]):
         """
         Initializes Random strategy.
 
@@ -33,7 +33,7 @@ class RandomRotationStrategy(BaseRotationStrategy):
 
     def get_next_key(
             self,
-            current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
+            current_key_metrics: dict[str, KeyMetrics] | None = None
     ) -> str:
         """
         Selects a random key from healthy keys.

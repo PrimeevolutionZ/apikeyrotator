@@ -3,7 +3,7 @@
 # 🔄 APIKeyRotator
 ### <img src="https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=600&size=24&pause=1000&color=4F46E5&center=true&vCenter=true&width=700&lines=Powerful+API+Key+Management+for+Python;Automatic+Rotation+%2B+Smart+Retries;Handle+Rate+Limits+Like+a+Pro;" alt="Typing SVG" />
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
@@ -72,6 +72,33 @@
 - Conditional routing
 
 </td>
+</tr>
+<tr>
+<td>
+
+🧯 **Production Resilience**
+- Per-host circuit breaker
+- Request deadlines (`total_timeout`)
+- Safe retries of POST/PATCH
+
+</td>
+<td>
+
+🚦 **Rate Limits Done Right**
+- Token bucket per key
+- `X-RateLimit-Remaining` hints
+- Shared across processes (Redis)
+
+</td>
+<td>
+
+🪶 **Lean & Fast**
+- 230 B per key, 69 ms import
+- requests / aiohttp / httpx (HTTP/2)
+- Background key refresh
+
+</td>
+</tr>
 
 
 </table>
@@ -81,7 +108,9 @@
 ### 📦 Installation
 
 ```bash
-pip install apikeyrotator
+pip install apikeyrotator            # Python 3.12+
+pip install "apikeyrotator[httpx]"   # + httpx backend / HTTP/2
+pip install "apikeyrotator[redis]"   # + shared state between processes
 ```
 
 ### ⚡ Basic Usage
@@ -167,6 +196,25 @@ rotator = APIKeyRotator(
 # Now make requests with all these features active!
 response = rotator.get("https://api.example.com/data")
 ```
+
+### 🧯 Production Setup
+
+```python
+import logging
+from apikeyrotator import APIKeyRotator, RedisStateBackend
+
+logging.basicConfig(level=logging.INFO)  # the library only logs if you configure logging
+
+rotator = APIKeyRotator(
+    api_keys=["key1", "key2", "key3"],
+    total_timeout=30,              # budget for all retries of one request
+    circuit_breaker=True,          # fail fast while a host is down
+    key_rate_limit=(60, 60),       # 60 requests/minute per key, enforced client-side
+    state_backend=RedisStateBackend(url="redis://localhost:6379/0"),  # shared by all workers
+)
+```
+
+**[📚 Resilience & scaling guide →](docs/RESILIENCE.md)**
 
 ### 🌐 Asynchronous Usage
 
@@ -323,6 +371,13 @@ user = client.get_user(123)
 | `random_delay_range` | `Tuple[float, float]` | `None`       | Random delay range (min, max)         |
 | `proxy_list`         | `List[str]`           | `None`       | Proxy URLs to rotate                  |
 | `error_classifier`   | `ErrorClassifier`     | `None`       | Custom error classifier               |
+| `total_timeout`      | `float`               | `None`       | Time budget per request incl. retries |
+| `circuit_breaker`    | `bool` / `CircuitBreakerConfig` | `None` | Per-host circuit breaker     |
+| `key_rate_limit`     | `(int, float)`        | `None`       | Token bucket per key (requests, secs) |
+| `state_backend`      | `StateBackend`        | `None`       | Shared state, e.g. Redis              |
+| `retry_non_idempotent` | `bool`              | `False`      | Retry POST/PATCH after 5xx/timeouts   |
+| `auto_refresh_interval` | `float`            | `None`       | Reload keys from the provider         |
+| `http_backend`       | `str`                 | `requests` / `aiohttp` | or `"httpx"` (`http2=True`) |
 
 **[📚 View Complete API Reference →](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/API_REFERENCE.md)**
 
@@ -460,19 +515,18 @@ Contributions are what make the open-source community amazing! We welcome:
 
 ## 📈 Performance
 
-APIKeyRotator is optimized for production use:
+Measured with the bundled benchmark (`python benchmarks/bench_core.py`, Python 3.12, 4 CPUs):
 
-- ⚡ **Connection Pooling**: Reuses TCP connections
-- 🧠 **Smart Caching**: Caches successful header configurations
-- 🔄 **Async Support**: Handle thousands of concurrent requests
-- 📊 **Memory Efficient**: Minimal memory footprint
+| | |
+|---|---|
+| Rotator overhead per request | ~10 µs CPU (~95k requests/s per core, transport excluded) |
+| Key selection | ~1 µs (round-robin / random / weighted, 10 or 1000 keys) |
+| Memory | ~230 bytes per key, no growth under sustained load |
+| `import apikeyrotator` | 69 ms, 13.8 MB |
+| Dead host + circuit breaker | 0.02 upstream calls per request instead of 3 |
 
-### Benchmarks
-
-```python
-# Synchronous: ~100 requests/second
-# Asynchronous: ~1000 requests/second (10x faster)
-```
+Every PR is benchmarked against its base branch in CI.
+**[📊 Benchmark docs and full results →](benchmarks/README.md)**
 
 ## 🔒 Security
 

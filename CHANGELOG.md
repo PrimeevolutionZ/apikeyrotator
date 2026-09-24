@@ -1,6 +1,30 @@
 # Changelog
 
 All notable changes to APIKeyRotator will be documented in this file.
+## [0.8.0] - 2026-09-24
+
+### ⚠️ Breaking changes
+- **Python 3.12+ is required** (was 3.8+). The code base uses modern syntax (`X | None`, `list[...]`, slots dataclasses).
+- **Logging**: the library no longer attaches a `StreamHandler` or sets log levels. A `NullHandler` is attached to the `apikeyrotator` logger; call `logging.basicConfig(level=logging.INFO)` in your application to see messages.
+- **POST/PATCH are no longer retried after errors where the request may already have been processed** (`500`, `502`, `504`, read timeouts, dropped connections) - the response is returned / the exception re-raised. They are still retried on `429`, `503`, `408`, `425`, connection failures and key rejections (`401`/`403`). Restore the old behaviour with `retry_non_idempotent=True` or per request with an `Idempotency-Key` header.
+
+### Added
+- **Request deadline** `total_timeout` (rotator default and per request): budget for all attempts and waits; `DeadlineExceededError` (a `TimeoutError` and `AllKeysExhaustedError`). Per-attempt timeouts are clipped to the remaining budget; waits that cannot finish in time are not started.
+- **Per-host circuit breaker** `circuit_breaker=True | CircuitBreakerConfig(...)`: after repeated 5xx/network failures requests fail fast with `CircuitOpenError` (FallbackRouter moves to the next provider); half-open probing; `get_circuit_states()`.
+- **Client-side key rate limits**: token bucket `key_rate_limit=(requests, per_seconds)`; keys reporting `X-RateLimit-Remaining: 0` are parked until reset (`respect_rate_limit_headers`, on by default). 429 without `Retry-After` now also honours `X-RateLimit-Reset`.
+- **Shared state between processes**: `state_backend=RedisStateBackend(...)` shares rate-limited keys, keys rejected with 401/403 and token buckets (atomic Lua, Redis server clock). Only key hashes (optionally HMAC-salted) are stored; Redis outages fail open. `InMemoryStateBackend` shares state between rotators in one process. Extra: `pip install apikeyrotator[redis]`.
+- **Background key refresh** `auto_refresh_interval=` (daemon thread / asyncio task, stopped by `close()`); `start_auto_refresh()` / `stop_auto_refresh()`. Refreshes never re-add keys rejected with 401/403.
+- **httpx backend** `http_backend="httpx"` for both rotators, optional `http2=True`, `http_client_kwargs=` for client settings. Extra: `pip install apikeyrotator[httpx]`.
+- `CircuitBreaker` utility rewritten: thread-safe, limited half-open probes, `retry_after()`.
+- Benchmark: CPU time per operation for every scenario, `resources` group (memory per key, leak check, allocations per request, import cost), scenarios for the new features, `--gate deterministic`, `--scenario-timeout`, best-of-N reporting.
+- **CI** (GitHub Actions): ruff, tests on Python 3.12/3.13, and a benchmark of every PR against its base branch (gated on machine-independent metrics).
+
+### Performance & resources
+- `import apikeyrotator` no longer loads aiohttp/requests/yaml: **245 ms → 69 ms, 33.5 MB → 13.8 MB RSS**. HTTP libraries load when a rotator using them is created.
+- Memory per key **374 B → 230 B** (round-robin) and **730 B → 230 B** (LRU / health-based): `KeyMetrics` uses `__slots__` and a striped lock pool; strategies no longer keep a second copy of per-key metrics.
+- Key selection and the plain request path are 2-17% faster despite the new features (see `benchmarks/README.md`); single-pass rate-limit header parsing shared with `RateLimitMiddleware`; one lock instead of three in `RotatorMetrics`; `__slots__` for `RequestInfo`/`ResponseInfo`/`ErrorInfo`; no `urlsplit` per request.
+- Test suite: 12.4 s → ~2 s (no real backoff sleeps), 268 tests.
+
 ## [0.7.0] - 2026-09-24
 
 ### Fixed

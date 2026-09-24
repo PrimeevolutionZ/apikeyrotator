@@ -1,8 +1,7 @@
 """Secret provider from Google Cloud Secret Manager"""
 
-import logging
 import asyncio
-from typing import List, Optional
+import logging
 
 from .base import parse_secret_payload
 
@@ -19,7 +18,7 @@ class GCPSecretManagerProvider:
         project_id: str,
         secret_id: str,
         version_id: str = "latest",
-        logger: Optional[logging.Logger] = None
+        logger: logging.Logger | None = None
     ):
         self.project_id = project_id
         self.secret_id = secret_id
@@ -41,10 +40,10 @@ class GCPSecretManagerProvider:
             self._client = secretmanager.SecretManagerServiceClient()
         return self._client
 
-    async def get_keys(self) -> List[str]:
+    async def get_keys(self) -> list[str]:
         from ..utils import retry_with_backoff
 
-        def _get_secret_value() -> List[str]:
+        def _get_secret_value() -> list[str]:
             client = self._get_client()
             name = f"projects/{self.project_id}/secrets/{self.secret_id}/versions/{self.version_id}"
             # Errors propagate so retry_with_backoff can retry them
@@ -62,5 +61,5 @@ class GCPSecretManagerProvider:
             self.logger.error(f"Failed to get keys from GCP secret {self.secret_id} after retries: {e}")
             return []
 
-    async def refresh_keys(self) -> List[str]:
+    async def refresh_keys(self) -> list[str]:
         return await self.get_keys()

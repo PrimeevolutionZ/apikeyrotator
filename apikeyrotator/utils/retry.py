@@ -2,8 +2,9 @@ import asyncio
 import functools
 import logging
 import time
-import threading
-from typing import Callable, Any, Type, Union, Tuple
+from collections.abc import Callable
+from typing import Any
+
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ def retry_with_backoff(
         func: Callable,
         retries: int = 3,
         backoff_factor: float = 0.5,
-        exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
+        exceptions: type[Exception] | tuple[type[Exception], ...] = Exception
 ) -> Any:
     """
     Universal function for retries with exponential backoff.
@@ -81,7 +82,7 @@ async def async_retry_with_backoff(
         func: Callable,
         retries: int = 3,
         backoff_factor: float = 0.5,
-        exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
+        exceptions: type[Exception] | tuple[type[Exception], ...] = Exception
 ) -> Any:
     """
     Asynchronous universal function for retries with exponential backoff.
@@ -195,115 +196,8 @@ def jittered_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 6
     return min(base + jitter, max_delay)
 
 
-class CircuitBreaker:
-    """
-    Circuit Breaker pattern for preventing cascading failures.
-
-    Tracks consecutive error count and temporarily
-    stops sending requests when threshold is exceeded.
-
-    States:
-    - CLOSED: Normal operation, requests pass
-    - OPEN: Too many errors, requests blocked
-    - HALF_OPEN: Trial period after recovery
-
-    Example:
-        >>> breaker = CircuitBreaker(failure_threshold=5, timeout=60)
-        >>>
-        >>> def make_request():
-        ...     if breaker.allow_request():
-        ...         try:
-        ...             response = requests.get('https://api.example.com')
-        ...             breaker.record_success()
-        ...             return response
-        ...         except Exception as e:
-        ...             breaker.record_failure()
-        ...             raise
-        ...     else:
-        ...         raise Exception("Circuit breaker is OPEN")
-    """
-
-    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
-        """
-        Initializes Circuit Breaker.
-
-        Args:
-            failure_threshold: Number of errors to open circuit
-            timeout: Time in seconds until transition to HALF_OPEN
-        """
-        self.failure_threshold = failure_threshold
-        self.timeout = timeout
-        self.failures = 0
-        self.last_failure_time = 0
-        self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
-
-        self._lock = threading.Lock()
-        self._state_lock = threading.Lock()
-
-    def allow_request(self) -> bool:
-        """
-        Checks if request can be executed.
-        Returns:
-            bool: True if request allowed, False otherwise
-        """
-        with self._state_lock:
-            if self.state == 'CLOSED':
-                return True
-
-            if self.state == 'OPEN':
-                # Check if enough time has passed to transition to HALF_OPEN
-                if time.time() - self.last_failure_time >= self.timeout:
-                    self.state = 'HALF_OPEN'
-                    return True
-                return False
-
-            # HALF_OPEN state
-            return True
-
-    def record_success(self):
-        """
-        Records successful request.
-        """
-        with self._lock:
-            self.failures = 0
-        with self._state_lock:
-            self.state = 'CLOSED'
-
-    def record_failure(self):
-        """
-        Records failed request.
-        """
-        with self._lock:
-            self.failures += 1
-            self.last_failure_time = time.time()
-            current_failures = self.failures
-
-        # Check threshold outside inner lock to avoid deadlock
-        if current_failures >= self.failure_threshold:
-            with self._state_lock:
-                if self.state != 'OPEN':
-                    self.state = 'OPEN'
-                    logger.warning(f"Circuit breaker opened after {current_failures} failures")
-
-    def get_state(self) -> str:
-        """
-        Get current circuit breaker state.
-
-        Returns:
-            str: 'CLOSED', 'OPEN' or 'HALF_OPEN'
-        """
-        with self._state_lock:
-            return self.state
-
-    def reset(self):
-        """
-        Resets circuit breaker to initial state.
-        """
-        with self._lock:
-            self.failures = 0
-            self.last_failure_time = 0
-        with self._state_lock:
-            self.state = 'CLOSED'
+# Backwards compatible re-export: the implementation lives in circuit_breaker.py
+from .circuit_breaker import CircuitBreaker  # noqa: E402,F401
 
 
 def measure_time(func: Callable) -> Callable:

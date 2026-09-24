@@ -6,7 +6,7 @@ import bisect
 import itertools
 import random
 import time
-from typing import Dict, List, Optional
+
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -26,7 +26,7 @@ class WeightedRotationStrategy(BaseRotationStrategy):
 
     _PROBES = 4
 
-    def __init__(self, keys: Dict[str, float]):
+    def __init__(self, keys: dict[str, float]):
         """
         Initializes Weighted strategy.
 
@@ -51,7 +51,7 @@ class WeightedRotationStrategy(BaseRotationStrategy):
 
     def get_next_key(
             self,
-            current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
+            current_key_metrics: dict[str, KeyMetrics] | None = None
     ) -> str:
         """
         Selects key considering weights, filtering out unhealthy keys.
@@ -98,7 +98,7 @@ class WeightedRotationStrategy(BaseRotationStrategy):
     def _rebuild_cumulative(self) -> None:
         self._cum_weights = list(itertools.accumulate(self._weights_list))
 
-    def update_keys(self, new_keys: List[str]) -> None:
+    def update_keys(self, new_keys: list[str]) -> None:
         """Updates available keys, preserving weights for existing keys."""
         with self._lock:
             self._keys = list(new_keys)

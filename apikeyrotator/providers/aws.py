@@ -1,8 +1,7 @@
 """Secret provider for AWS Secrets Manager"""
 
-import logging
 import asyncio
-from typing import List, Optional
+import logging
 
 from .base import parse_secret_payload
 
@@ -24,7 +23,7 @@ class AWSSecretsManagerProvider:
         self,
         secret_name: str,
         region_name: str = 'us-east-1',
-        logger: Optional[logging.Logger] = None
+        logger: logging.Logger | None = None
     ):
         self.secret_name = secret_name
         self.region_name = region_name
@@ -48,10 +47,10 @@ class AWSSecretsManagerProvider:
             )
         return self._client
 
-    async def get_keys(self) -> List[str]:
+    async def get_keys(self) -> list[str]:
         from ..utils import retry_with_backoff
 
-        def _get_secret_value() -> List[str]:
+        def _get_secret_value() -> list[str]:
             client = self._get_client()
             try:
                 response = client.get_secret_value(SecretId=self.secret_name)
@@ -77,5 +76,5 @@ class AWSSecretsManagerProvider:
             self.logger.error(f"Failed to get keys from AWS secret {self.secret_name} after retries: {e}")
             return []
 
-    async def refresh_keys(self) -> List[str]:
+    async def refresh_keys(self) -> list[str]:
         return await self.get_keys()

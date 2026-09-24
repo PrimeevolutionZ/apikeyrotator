@@ -1,13 +1,16 @@
-from .rotator import APIKeyRotator, AsyncAPIKeyRotator
+from .config_loader import ConfigLoader
 from .exceptions import (
-    APIKeyError,
-    NoAPIKeysError,
     AllKeysExhaustedError,
     AllProvidersExhaustedError,
+    APIKeyError,
+    CircuitOpenError,
+    DeadlineExceededError,
     HTTPStatusError,
+    NoAPIKeysError,
 )
 from .key_parser import parse_keys
-from .config_loader import ConfigLoader
+from .rotator import APIKeyRotator, AsyncAPIKeyRotator
+
 
 __all__ = [
     "APIKeyRotator",
@@ -17,6 +20,8 @@ __all__ = [
     "AllKeysExhaustedError",
     "AllProvidersExhaustedError",
     "HTTPStatusError",
+    "DeadlineExceededError",
+    "CircuitOpenError",
     "parse_keys",
     "ConfigLoader",
 ]

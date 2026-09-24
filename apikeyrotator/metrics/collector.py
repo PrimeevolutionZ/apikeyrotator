@@ -2,10 +2,10 @@
 Metrics collector for the rotator
 """
 
-import time
 import threading
+import time
 from collections import defaultdict
-from typing import Dict, Any
+from typing import Any
 
 from .models import EndpointStats
 
@@ -34,7 +34,7 @@ class RotatorMetrics:
         self.max_endpoints = max(1, max_endpoints)
 
         # Statistics by endpoint
-        self.endpoint_stats: Dict[str, EndpointStats] = defaultdict(EndpointStats)
+        self.endpoint_stats: dict[str, EndpointStats] = defaultdict(EndpointStats)
 
         # General statistics
         self.total_requests = 0
@@ -44,7 +44,7 @@ class RotatorMetrics:
 
         # Thread-safety
         self._lock = threading.RLock()
-        self._endpoint_lock = threading.RLock()
+        self._endpoint_lock = self._lock  # kept for backwards compatibility
 
     def record_request(
             self,
@@ -64,7 +64,7 @@ class RotatorMetrics:
             response_time: Execution time in seconds
             is_rate_limited: Whether rate limit was hit
         """
-        # General statistics (thread-safe)
+        # One lock for counters and endpoint stats (instead of three lock round-trips)
         with self._lock:
             self.total_requests += 1
             if success:
@@ -72,14 +72,16 @@ class RotatorMetrics:
             else:
                 self.failed_requests += 1
 
-        # Endpoint statistics (separate lock to minimize contention)
-        with self._endpoint_lock:
-            if endpoint not in self.endpoint_stats and len(self.endpoint_stats) >= self.max_endpoints:
-                endpoint = self.OVERFLOW_ENDPOINT
-            stats = self.endpoint_stats[endpoint]
-        stats.update(success, response_time)
+            stats = self.endpoint_stats.get(endpoint)
+            if stats is None:
+                if len(self.endpoint_stats) >= self.max_endpoints:
+                    endpoint = self.OVERFLOW_ENDPOINT
+                stats = self.endpoint_stats[endpoint]
+            # EndpointStats.to_dict() takes stats._lock; hold it too for a consistent view
+            with stats._lock:
+                stats._update_unlocked(success, response_time)
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """
         Get all metrics as a dictionary (thread-safe).
 
@@ -101,7 +103,7 @@ class RotatorMetrics:
                 },
             }
 
-    def get_endpoint_stats(self, endpoint: str) -> Dict[str, Any]:
+    def get_endpoint_stats(self, endpoint: str) -> dict[str, Any]:
         """Get statistics for a specific endpoint"""
         with self._endpoint_lock:
             if endpoint in self.endpoint_stats:

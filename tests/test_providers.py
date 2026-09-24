@@ -3,20 +3,22 @@ Tests for secret providers
 Tests: environment, file, AWS, GCP providers
 """
 
-import pytest
+import json
 import os
 import sys
-import json
 import types
 from unittest.mock import Mock, patch
+
+import pytest
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from apikeyrotator import APIKeyRotator
 from apikeyrotator.providers import (
+    AWSSecretsManagerProvider,
     EnvironmentSecretProvider,
     FileSecretProvider,
-    AWSSecretsManagerProvider,
     GCPSecretManagerProvider,
     create_secret_provider,
 )

@@ -3,21 +3,23 @@ Rotation strategies tests for APIKeyRotator
 Tests: RoundRobin, Random, Weighted, LRU, HealthBased strategies
 """
 
-import pytest
 import os
 import sys
 import time
 
+import pytest
+
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from apikeyrotator.strategies import (
-    create_rotation_strategy,
-    RoundRobinRotationStrategy,
-    RandomRotationStrategy,
-    WeightedRotationStrategy,
-    LRURotationStrategy,
     HealthBasedStrategy,
     KeyMetrics,
+    LRURotationStrategy,
+    RandomRotationStrategy,
+    RoundRobinRotationStrategy,
+    WeightedRotationStrategy,
+    create_rotation_strategy,
 )
 
 
@@ -338,7 +340,6 @@ class TestKeyMetrics:
 
         # Success
         metrics.update_from_request(success=True, response_time=0.1)
-        first_rate = metrics.success_rate
 
         # Another success
         metrics.update_from_request(success=True, response_time=0.1)

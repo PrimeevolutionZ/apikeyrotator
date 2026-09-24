@@ -2,9 +2,9 @@
 Health-Based rotation strategy
 """
 
-import time
 import random
-from typing import List, Dict, Optional
+import time
+
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -31,7 +31,7 @@ class HealthBasedStrategy(BaseRotationStrategy):
 
     def __init__(
             self,
-            keys: List[str],
+            keys: list[str],
             failure_threshold: int = 3,
             health_check_interval: int = 300
     ):
@@ -48,13 +48,13 @@ class HealthBasedStrategy(BaseRotationStrategy):
         self.health_check_interval = health_check_interval
 
         # Create metrics to track health
-        self._key_metrics: Dict[str, KeyMetrics] = {
+        self._key_metrics: dict[str, KeyMetrics] = {
             key: KeyMetrics(key) for key in keys
         }
 
     def get_next_key(
             self,
-            current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
+            current_key_metrics: dict[str, KeyMetrics] | None = None
     ) -> str:
         """
         Selects a random healthy key.
@@ -140,7 +140,13 @@ class HealthBasedStrategy(BaseRotationStrategy):
         if not success and metrics.consecutive_failures >= self.failure_threshold:
             metrics.is_healthy = False
 
-    def update_keys(self, new_keys: List[str]) -> None:
+    def use_external_metrics(self) -> None:
+        """The rotator passes its own metrics on every call - drop the internal copies."""
+        with self._lock:
+            self._external_metrics = True
+            self._key_metrics = {}
+
+    def update_keys(self, new_keys: list[str]) -> None:
         """Updates keys, adding metrics for new keys and removing stale ones."""
         with self._lock:
             self._keys = list(new_keys)
@@ -148,6 +154,8 @@ class HealthBasedStrategy(BaseRotationStrategy):
             for key in list(self._key_metrics.keys()):
                 if key not in new_set:
                     del self._key_metrics[key]
+            if getattr(self, '_external_metrics', False):
+                return
             for key in new_keys:
                 if key not in self._key_metrics:
                     self._key_metrics[key] = KeyMetrics(key)

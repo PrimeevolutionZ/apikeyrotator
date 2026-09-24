@@ -3,7 +3,7 @@ Round Robin rotation strategy
 """
 
 import time
-from typing import List, Dict, Optional
+
 from .base import BaseRotationStrategy, KeyMetrics
 
 
@@ -20,7 +20,7 @@ class RoundRobinRotationStrategy(BaseRotationStrategy):
         >>> strategy.get_next_key()  # 'key1'
     """
 
-    def __init__(self, keys: List[str]):
+    def __init__(self, keys: list[str]):
         """
         Initializes Round Robin strategy.
 
@@ -35,7 +35,7 @@ class RoundRobinRotationStrategy(BaseRotationStrategy):
 
     def get_next_key(
             self,
-            current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
+            current_key_metrics: dict[str, KeyMetrics] | None = None
     ) -> str:
         """
         Selects the next key in order.

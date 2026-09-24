@@ -5,10 +5,11 @@ The purpose of the module is to provide an extensible and modular architecture f
 """
 
 from .base import RotatorMiddleware
-from .models import RequestInfo, ResponseInfo, ErrorInfo
-from .logging import LoggingMiddleware
 from .caching import CachingMiddleware
+from .logging import LoggingMiddleware
+from .models import ErrorInfo, RequestInfo, ResponseInfo
 from .rate_limit import RateLimitMiddleware
+
 
 __all__ = [
     "RotatorMiddleware",

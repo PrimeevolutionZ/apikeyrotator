@@ -3,16 +3,19 @@ Metrics and monitoring tests for APIKeyRotator
 Tests: RotatorMetrics, PrometheusExporter, ErrorClassifier
 """
 
-import pytest
 import os
 import sys
+
+import pytest
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from unittest.mock import MagicMock
 
 from apikeyrotator import ErrorClassifier, ErrorType
-from apikeyrotator.metrics import RotatorMetrics, PrometheusExporter
+from apikeyrotator.metrics import PrometheusExporter, RotatorMetrics
+
 
 try:
     import requests
@@ -200,8 +203,8 @@ class TestPrometheusExporter:
         lines = output.split('\n')
 
         # Should have HELP and TYPE comments
-        help_lines = [l for l in lines if l.startswith('# HELP')]
-        type_lines = [l for l in lines if l.startswith('# TYPE')]
+        help_lines = [line for line in lines if line.startswith('# HELP')]
+        type_lines = [line for line in lines if line.startswith('# TYPE')]
 
         assert len(help_lines) > 0
         assert len(type_lines) > 0

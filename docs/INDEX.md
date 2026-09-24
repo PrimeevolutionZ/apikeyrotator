@@ -16,6 +16,7 @@ This documentation will help you get started with APIKeyRotator and master its a
 | [Examples](EXAMPLES.md)               | Real-world code examples                     | Practical implementation patterns      |
 | [Advanced Usage](ADVANCED_USAGE.md)   | Power features and customization             | Advanced users, custom implementations |
 | [Error Handling](ERROR_HANDLING.md)   | Comprehensive error management guide         | Debugging, production deployment       |
+| [Resilience & Scaling](RESILIENCE.md) | Deadlines, circuit breaker, rate limits, Redis, httpx | Production under load, many workers |
 | [FAQ](FAQ.md)                         | Frequently asked questions                   | Quick answers to common questions      |
 
 ---

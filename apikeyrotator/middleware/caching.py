@@ -1,13 +1,14 @@
 """
 Middleware for caching
 """
-import time
 import hashlib
 import json
 import logging
 import threading
-from typing import Dict, Any, Optional, Union
+import time
 from collections import OrderedDict
+from typing import Any
+
 from .base import RotatorMiddleware
 from .models import RequestInfo, ResponseInfo
 
@@ -25,9 +26,9 @@ class CachingMiddleware(RotatorMiddleware):
         max_cache_size: int = 1000,
         max_cache_size_bytes: int = 100 * 1024 * 1024,
         max_cacheable_size: int = 10 * 1024 * 1024,
-        logger: Optional[logging.Logger] = None
+        logger: logging.Logger | None = None
     ):
-        self.cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self.cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.ttl = ttl
         self.cache_only_get = cache_only_get
         self.max_cache_size = max(1, max_cache_size)
@@ -58,7 +59,7 @@ class CachingMiddleware(RotatorMiddleware):
             return self._current_size_bytes
 
     @staticmethod
-    def _header(headers: Dict[str, Any], name: str) -> str:
+    def _header(headers: dict[str, Any], name: str) -> str:
         if not headers:
             return ''
         name_lower = name.lower()
@@ -134,7 +135,7 @@ class CachingMiddleware(RotatorMiddleware):
 
     # --- Sync Implementation ---
 
-    def before_request_sync(self, request_info: RequestInfo) -> Union[RequestInfo, ResponseInfo]:
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo | ResponseInfo:
         if self.cache_only_get and request_info.method.upper() != 'GET':
             return request_info
 
@@ -186,13 +187,13 @@ class CachingMiddleware(RotatorMiddleware):
 
     # --- Async Hooks ---
 
-    async def before_request(self, request_info: RequestInfo) -> Union[RequestInfo, ResponseInfo]:
+    async def before_request(self, request_info: RequestInfo) -> RequestInfo | ResponseInfo:
         return self.before_request_sync(request_info)
 
     async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
         return self.after_request_sync(response_info)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             total = self.hits + self.misses
             return {

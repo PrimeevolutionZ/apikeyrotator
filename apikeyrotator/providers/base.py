@@ -3,14 +3,14 @@ Base protocol for secret providers
 """
 
 import json
-from typing import Any, List, Protocol
+from typing import Any, Protocol
 
 
-def _split_csv(value: str) -> List[str]:
+def _split_csv(value: str) -> list[str]:
     return [k.strip() for k in value.replace('\n', ',').split(',') if k.strip()]
 
 
-def parse_secret_payload(secret: str) -> List[str]:
+def parse_secret_payload(secret: str) -> list[str]:
     """
     Parses a secret payload into a list of keys.
 
@@ -49,7 +49,7 @@ class SecretProvider(Protocol):
     - refresh_keys(): For key refresh (rotation, expiration)
     """
 
-    async def get_keys(self) -> List[str]:
+    async def get_keys(self) -> list[str]:
         """
         Asynchronously retrieves a list of API keys.
 
@@ -64,7 +64,7 @@ class SecretProvider(Protocol):
         """
         ...
 
-    async def refresh_keys(self) -> List[str]:
+    async def refresh_keys(self) -> list[str]:
         """
         Asynchronously refreshes the list of API keys.
 

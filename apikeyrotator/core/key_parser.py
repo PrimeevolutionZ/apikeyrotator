@@ -1,27 +1,15 @@
-import os
-from typing import List, Optional, Union
 import logging
+import os
+
 from .exceptions import NoAPIKeysError
 
 
-def _setup_default_logger():
-    """
-    Creates and configures a default logger.
-
-    Returns:
-        logging.Logger: Configured logger
-    """
-    logger = logging.getLogger(__name__)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-    return logger
+def _setup_default_logger() -> logging.Logger:
+    """Library logger - output is configured by the application (see logging docs)."""
+    return logging.getLogger(__name__)
 
 
-def _dedupe(keys: List[str], logger: logging.Logger) -> List[str]:
+def _dedupe(keys: list[str], logger: logging.Logger) -> list[str]:
     """Removes duplicate keys while preserving order."""
     unique = list(dict.fromkeys(keys))
     if len(unique) != len(keys):
@@ -30,10 +18,10 @@ def _dedupe(keys: List[str], logger: logging.Logger) -> List[str]:
 
 
 def parse_keys(
-        api_keys: Optional[Union[List[str], str]] = None,
+        api_keys: list[str] | str | None = None,
         env_var: str = "API_KEYS",
-        logger: Optional[logging.Logger] = None
-) -> List[str]:
+        logger: logging.Logger | None = None
+) -> list[str]:
     """
     Smart parser for API keys from various sources.
 
@@ -130,7 +118,7 @@ def parse_keys(
     return keys
 
 
-def validate_key_format(key: str, key_format: Optional[str] = None) -> bool:
+def validate_key_format(key: str, key_format: str | None = None) -> bool:
     """
     Validates the format of an API key.
 
@@ -179,10 +167,10 @@ def validate_key_format(key: str, key_format: Optional[str] = None) -> bool:
 
 
 def filter_valid_keys(
-        keys: List[str],
-        key_format: Optional[str] = None,
-        logger: Optional[logging.Logger] = None
-) -> List[str]:
+        keys: list[str],
+        key_format: str | None = None,
+        logger: logging.Logger | None = None
+) -> list[str]:
     """
     Filters a list of keys, keeping only valid ones.
 

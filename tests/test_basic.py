@@ -3,39 +3,41 @@ Basic functionality tests for APIKeyRotator
 Tests: initialization, sync/async requests, error handling
 """
 
-import pytest
 import os
 import sys
-import time
+
+import pytest
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 from apikeyrotator import (
+    AllKeysExhaustedError,
     APIKeyRotator,
     AsyncAPIKeyRotator,
     NoAPIKeysError,
-    AllKeysExhaustedError,
 )
+
 
 # Check optional dependencies
 try:
-    import requests
+    import requests  # noqa: F401
 
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
 
 try:
-    import aiohttp
+    import aiohttp  # noqa: F401
 
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False
 
 try:
-    import requests_mock
+    import requests_mock  # noqa: F401
 
     HAS_REQUESTS_MOCK = True
 except ImportError:
@@ -160,7 +162,7 @@ class TestSyncRequests:
 
     @pytest.mark.skipif(not HAS_REQUESTS, reason="requests not installed")
     def test_retry_on_failure(self):
-        rotator = APIKeyRotator(api_keys=["key1"], max_retries=3, load_env_file=False)
+        rotator = APIKeyRotator(api_keys=["key1"], max_retries=3, base_delay=0.01, load_env_file=False)
         with patch('requests.Session.request') as mock_request:
             mock_request.side_effect = [
                 Mock(status_code=429, headers={}, content=b''),
@@ -253,6 +255,7 @@ class TestCustomCallbacks:
         rotator = APIKeyRotator(
             api_keys=['key1'],
             should_retry_callback=custom_retry,
+            base_delay=0.01,
             load_env_file=False
         )
 

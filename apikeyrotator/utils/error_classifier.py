@@ -1,14 +1,27 @@
 import time
+from collections.abc import Mapping
 from email.utils import parsedate_to_datetime
 from enum import Enum
-from typing import Any, Mapping, Optional
-import requests
+from typing import TYPE_CHECKING, Any
 
 
-def get_header(headers: Optional[Mapping[str, Any]], name: str) -> Optional[str]:
+if TYPE_CHECKING:  # requests is imported lazily - only needed to classify its exceptions
+    import requests
+
+# Values below this are "seconds until reset", larger values are UNIX timestamps
+_EPOCH_THRESHOLD = 1_000_000_000
+
+
+# Header containers that already do case-insensitive lookups (requests, aiohttp/multidict, httpx)
+_CASE_INSENSITIVE_HEADERS = frozenset({
+    "CaseInsensitiveDict", "CIMultiDict", "CIMultiDictProxy", "Headers",
+})
+
+
+def get_header(headers: Mapping[str, Any] | None, name: str) -> str | None:
     """
     Case-insensitive header lookup that works for plain dicts as well as
-    requests/aiohttp case-insensitive mappings.
+    requests/aiohttp/httpx case-insensitive mappings.
     """
     if not headers:
         return None
@@ -16,7 +29,7 @@ def get_header(headers: Optional[Mapping[str, Any]], name: str) -> Optional[str]
         value = headers.get(name)
     except AttributeError:
         return None
-    if value is not None:
+    if value is not None or type(headers).__name__ in _CASE_INSENSITIVE_HEADERS:
         return value
     name_lower = name.lower()
     for k, v in headers.items():
@@ -25,7 +38,7 @@ def get_header(headers: Optional[Mapping[str, Any]], name: str) -> Optional[str]
     return None
 
 
-def parse_retry_after(headers: Optional[Mapping[str, Any]]) -> Optional[float]:
+def parse_retry_after(headers: Mapping[str, Any] | None) -> float | None:
     """
     Parses the ``Retry-After`` header.
 
@@ -70,6 +83,86 @@ class ErrorType(Enum):
     UNKNOWN = "unknown"
 
 
+def _parse_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        # Some APIs send lists like "100, 100;w=60" - take the first value
+        return float(str(value).split(',')[0].split(';')[0].strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def to_reset_timestamp(value: float, now: float | None = None) -> float:
+    """Normalizes a rate-limit reset value (delta seconds or UNIX timestamp) to a UNIX timestamp."""
+    if now is None:
+        now = time.time()
+    if value < _EPOCH_THRESHOLD:
+        return now + max(0.0, value)
+    return value
+
+
+_RATE_LIMIT_FIELDS = {
+    # lower-cased header -> (field index, priority); X- variant wins over IETF draft
+    'x-ratelimit-limit': (0, 0), 'ratelimit-limit': (0, 1),
+    'x-ratelimit-remaining': (1, 0), 'ratelimit-remaining': (1, 1),
+    'x-ratelimit-reset': (2, 0), 'ratelimit-reset': (2, 1),
+}
+_CI_NAMES = (
+    ('X-RateLimit-Limit', 'RateLimit-Limit'),
+    ('X-RateLimit-Remaining', 'RateLimit-Remaining'),
+    ('X-RateLimit-Reset', 'RateLimit-Reset'),
+)
+
+
+def rate_limit_header_values(headers: Mapping[str, Any] | None) -> tuple[Any, Any, Any]:
+    """
+    Raw (limit, remaining, reset) header values - ``X-RateLimit-*`` preferred over
+    the IETF ``RateLimit-*`` names. Hot path: case-insensitive containers get direct
+    lookups, plain dicts are scanned exactly once.
+    """
+    if not headers:
+        return None, None, None
+    if type(headers).__name__ in _CASE_INSENSITIVE_HEADERS:
+        get = headers.get
+        out = []
+        for primary, secondary in _CI_NAMES:
+            value = get(primary)
+            out.append(get(secondary) if value is None else value)
+        return out[0], out[1], out[2]
+    values: list[Any] = [None, None, None]
+    prios = [2, 2, 2]
+    try:
+        items = headers.items()
+    except AttributeError:
+        return None, None, None
+    fields = _RATE_LIMIT_FIELDS
+    for k, v in items:
+        if not isinstance(k, str) or not 15 <= len(k) <= 21:
+            continue  # cheap filter: all names are 15..21 chars long
+        hit = fields.get(k.lower())
+        if hit is not None:
+            idx, prio = hit
+            if prio < prios[idx]:
+                values[idx], prios[idx] = v, prio
+    return values[0], values[1], values[2]
+
+
+def parse_rate_limit_headers(headers: Mapping[str, Any] | None) -> tuple[float | None, float | None]:
+    """
+    Reads ``X-RateLimit-Remaining``/``-Reset`` (or the IETF ``RateLimit-*`` variant).
+
+    Returns:
+        (remaining, reset_timestamp) - each None if the header is missing/invalid.
+    """
+    _, remaining_raw, reset_raw = rate_limit_header_values(headers)
+    if remaining_raw is None:
+        return None, None
+    remaining = _parse_number(remaining_raw)
+    reset = _parse_number(reset_raw)
+    return remaining, (to_reset_timestamp(reset) if reset is not None else None)
+
+
 class ErrorClassifier:
     """
     HTTP request error classifier.
@@ -77,7 +170,7 @@ class ErrorClassifier:
     and whether to switch API keys.
     """
 
-    def __init__(self, custom_retryable_codes: Optional[list] = None):
+    def __init__(self, custom_retryable_codes: list | None = None):
         """
         Args:
             custom_retryable_codes: Additional status codes considered temporary
@@ -86,8 +179,8 @@ class ErrorClassifier:
 
     def classify_error(
             self,
-            response: Optional[requests.Response] = None,
-            exception: Optional[Exception] = None
+            response: "requests.Response | None" = None,
+            exception: Exception | None = None
     ) -> ErrorType:
         """
         Classifies errors to decide whether to retry.
@@ -124,23 +217,7 @@ class ErrorClassifier:
         """
         # Classify exceptions
         if exception:
-            if isinstance(exception, (
-                    requests.exceptions.ConnectionError,
-                    requests.exceptions.ConnectTimeout,
-                    requests.exceptions.ReadTimeout,
-                    requests.exceptions.Timeout
-            )):
-                return ErrorType.NETWORK
-
-            # SSL errors - usually temporary (may be proxy certificate issues)
-            if isinstance(exception, requests.exceptions.SSLError):
-                return ErrorType.TEMPORARY
-
-            # Other requests exceptions
-            if isinstance(exception, requests.exceptions.RequestException):
-                return ErrorType.NETWORK
-
-            return ErrorType.UNKNOWN
+            return self._classify_exception(exception)
 
         # If no response, return UNKNOWN
         if response is None:
@@ -221,10 +298,33 @@ class ErrorClassifier:
         # 2xx, 3xx and other codes - not errors
         return ErrorType.UNKNOWN
 
+    @staticmethod
+    def _classify_exception(exception: BaseException) -> "ErrorType":
+        module = type(exception).__module__ or ""
+        if module.startswith("requests"):
+            import requests
+
+            if isinstance(exception, (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+            )):
+                return ErrorType.NETWORK
+            # SSL errors - usually temporary (may be proxy certificate issues)
+            if isinstance(exception, requests.exceptions.SSLError):
+                return ErrorType.TEMPORARY
+            if isinstance(exception, requests.exceptions.RequestException):
+                return ErrorType.NETWORK
+            return ErrorType.UNKNOWN
+        if module.startswith(("aiohttp", "httpx", "httpcore")):
+            return ErrorType.NETWORK
+        if isinstance(exception, (TimeoutError, ConnectionError)):
+            return ErrorType.NETWORK
+        return ErrorType.UNKNOWN
+
     def is_retryable(
             self,
-            response: Optional[requests.Response] = None,
-            exception: Optional[Exception] = None
+            response: "requests.Response | None" = None,
+            exception: Exception | None = None
     ) -> bool:
         """
         Determines whether the request can be retried.
@@ -241,8 +341,8 @@ class ErrorClassifier:
 
     def should_switch_key(
             self,
-            response: Optional[requests.Response] = None,
-            exception: Optional[Exception] = None
+            response: "requests.Response | None" = None,
+            exception: Exception | None = None
     ) -> bool:
         """
         Determines whether to switch the API key.
@@ -260,8 +360,8 @@ class ErrorClassifier:
 
     def should_remove_key(
             self,
-            response: Optional[requests.Response] = None,
-            exception: Optional[Exception] = None
+            response: "requests.Response | None" = None,
+            exception: Exception | None = None
     ) -> bool:
         """
         Determines whether to remove the API key from rotation.
@@ -282,7 +382,7 @@ class ErrorClassifier:
 
     def get_retry_delay(
             self,
-            response: Optional[requests.Response] = None,
+            response: "requests.Response | None" = None,
             default_delay: float = 1.0
     ) -> float:
         """
