@@ -4,6 +4,7 @@ Strategies package - API key rotation strategies
 
 from .base import BaseRotationStrategy, KeyMetrics, RotationStrategy
 from .factory import create_rotation_strategy
+from .failover import FailoverRotationStrategy
 from .health_based import HealthBasedStrategy
 from .lru import LRURotationStrategy
 from .random import RandomRotationStrategy
@@ -20,5 +21,6 @@ __all__ = [
     "WeightedRotationStrategy",
     "LRURotationStrategy",
     "HealthBasedStrategy",
+    "FailoverRotationStrategy",
     "create_rotation_strategy",
 ]

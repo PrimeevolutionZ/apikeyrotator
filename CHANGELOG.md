@@ -19,6 +19,18 @@ All notable changes to APIKeyRotator will be documented in this file.
 - Benchmark: CPU time per operation for every scenario, `resources` group (memory per key, leak check, allocations per request, import cost), scenarios for the new features, `--gate deterministic`, `--scenario-timeout`, best-of-N reporting.
 - **CI** (GitHub Actions): ruff, tests on Python 3.12/3.13, and a benchmark of every PR against its base branch (gated on machine-independent metrics).
 
+- **`failover` rotation strategy** (`FailoverRotationStrategy`): always the first available key, the rest are backups. The never-implemented `RotationStrategy.RATE_LIMIT_AWARE` enum member was removed (it always raised `ValueError`).
+- `py.typed` marker - type hints are now visible to type checkers (the package already declared `Typing :: Typed`).
+
+### Changed
+- The default auth header is no longer added when the request or `header_callback` already sets `X-API-Key` (previously the key was sent twice: `X-API-Key` and `Authorization: Key ...`).
+
+### Documentation
+- All guides rewritten against the actual API and checked automatically: `scripts/check_docs.py` verifies that every example's imports, parameters and methods exist and that links/anchors resolve (runs in CI); every example was also executed with a mocked network.
+- Fixed many wrong or broken examples: async-only middleware used with the sync rotator (hooks never ran), middlewares putting private keys into `request_info.kwargs` (crashed the HTTP call), non-existent methods (`clear_cache()`, `clear_limits()`, `strategy.keys()`, `CircuitBreaker.call()`), wrong `export_config()`/cache stats keys, the `if response:` truthiness bug in classifier examples, logging raw keys, a broken code fence that swallowed half of the README.
+- Corrected behaviour descriptions: `max_retries` is per request (not per key), 4xx responses are returned (not "remove key"), the config file is read-only (nothing is "learned and saved"), `after_request` runs in list order, the rotator is thread-safe (share one instance), `requests`/`aiohttp` are required dependencies.
+- New `docs/RESILIENCE.md`; `API_REFERENCE.md` regenerated from the code (router, state backends, all parameters and methods); `SECURITY.md` gained guidance on redirects leaking custom auth headers and Redis hardening.
+
 ### Performance & resources
 - `import apikeyrotator` no longer loads aiohttp/requests/yaml: **245 ms → 69 ms, 33.5 MB → 13.8 MB RSS**. HTTP libraries load when a rotator using them is created.
 - Memory per key **374 B → 230 B** (round-robin) and **730 B → 230 B** (LRU / health-based): `KeyMetrics` uses `__slots__` and a striped lock pool; strategies no longer keep a second copy of per-key metrics.

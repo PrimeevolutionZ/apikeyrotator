@@ -1,7 +1,5 @@
 # Frequently Asked Questions (FAQ)
 
-Common questions and answers about APIKeyRotator.
-
 ## Table of Contents
 
 - [General Questions](#general-questions)
@@ -17,30 +15,31 @@ Common questions and answers about APIKeyRotator.
 
 ### What is APIKeyRotator?
 
-APIKeyRotator is a Python library that automatically manages multiple API keys for your applications. It handles key rotation, retries failed requests, manages rate limits, and provides anti-bot evasion features.
+A Python library that spreads requests over several API keys and handles the
+failure modes of real APIs for you: rate limits, invalid keys, server errors,
+network problems and dead hosts. It works with `requests`, `aiohttp` or `httpx`.
 
-### Why do I need APIKeyRotator?
+### Why do I need it?
 
-You need APIKeyRotator if you:
-- Have multiple API keys and want to distribute load
-- Need to handle rate limits automatically
-- Want automatic retry logic for failed requests
-- Need to rotate User-Agents or proxies
-- Want resilient API clients without boilerplate code
+- You have several API keys and want to use them all without hand-written rotation.
+- You want 429s, 5xx and timeouts handled consistently (backoff, key switching, deadlines).
+- Several processes share the same keys and must respect the same limits (Redis).
+- You want a resilient client without boilerplate: circuit breaker, provider fallback,
+  caching, metrics.
 
-### Is APIKeyRotator free?
+### Is it free?
 
-Yes! APIKeyRotator is open-source and distributed under the MIT License. You can use it freely in commercial and non-commercial projects.
+Yes, it is open source under the MIT License.
 
 ### What Python versions are supported?
 
-APIKeyRotator supports Python 3.12 and higher (since 0.8.0).
+Python 3.12 and newer (since 0.8.0). Use apikeyrotator 0.7.x for older Pythons.
 
 ---
 
 ## Installation & Setup
 
-### How do I install APIKeyRotator?
+### How do I install it?
 
 ```bash
 pip install apikeyrotator
@@ -48,61 +47,32 @@ pip install apikeyrotator
 
 ### Do I need to install requests or aiohttp separately?
 
-Yes, these are optional dependencies. Install based on your needs:
+No. `requests`, `aiohttp`, `python-dotenv` and `PyYAML` are regular dependencies.
+Optional extras:
 
 ```bash
-# For synchronous use
-pip install requests
-
-# For asynchronous use
-pip install aiohttp
-
-# For environment file support
-pip install python-dotenv
-
-# Install everything
-pip install apikeyrotator[all]
+pip install "apikeyrotator[httpx]"   # httpx backend, HTTP/2
+pip install "apikeyrotator[redis]"   # shared state between processes
+pip install "apikeyrotator[aws]"     # AWS Secrets Manager
+pip install "apikeyrotator[gcp]"     # GCP Secret Manager
 ```
+
+HTTP libraries are imported lazily, so a sync-only application never loads aiohttp.
 
 ### How do I set up my API keys?
 
-**Option 1: Using .env file**
-```bash
-# .env
-API_KEYS=key1,key2,key3
-```
-
 ```python
 from apikeyrotator import APIKeyRotator
-rotator = APIKeyRotator()  # Automatically loads from .env
+
+rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"])   # directly
+rotator = APIKeyRotator(api_keys="key1,key2,key3")           # comma-separated string
+rotator = APIKeyRotator()                                    # API_KEYS env variable or .env file
+rotator = APIKeyRotator(env_var="MY_CUSTOM_KEYS")            # another variable
 ```
 
-**Option 2: Direct passing**
-```python
-rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"])
-```
-
-**Option 3: Environment variable**
-```bash
-export API_KEYS="key1,key2,key3"
-```
-
-```python
-rotator = APIKeyRotator()  # Loads from environment
-```
-
-### Can I use different environment variable names?
-
-Yes:
-
-```bash
-# .env
-MY_CUSTOM_KEYS=key1,key2,key3
-```
-
-```python
-rotator = APIKeyRotator(env_var="MY_CUSTOM_KEYS")
-```
+Or load them from a secret store with `secret_provider=` (AWS, GCP, file, env) and
+keep them fresh with `auto_refresh_interval=`. Duplicates and blank entries are
+removed automatically.
 
 ---
 
@@ -110,437 +80,312 @@ rotator = APIKeyRotator(env_var="MY_CUSTOM_KEYS")
 
 ### How does key rotation work?
 
-APIKeyRotator automatically rotates keys when:
-1. A rate limit is encountered (HTTP 429)
-2. An authentication error occurs (HTTP 401/403)
-3. Network errors happen
-4. After maximum retries on a key
+Every attempt asks the rotation strategy for a key. With the default round-robin
+strategy consecutive requests use `key1 → key2 → key3 → key1 ...`. Keys that are
+not usable are skipped:
 
-Example:
-```python
-rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"])
-# Request 1 uses key1
-# If key1 is rate-limited, request 2 uses key2
-# If key2 works, it continues with key2
-# Pattern: Use current key until it fails, then rotate
-```
+- **429** - the key is parked until `Retry-After` / `X-RateLimit-Reset`;
+- **`X-RateLimit-Remaining: 0`** - parked until the reset, before a 429 even happens;
+- **401 / 403** - the key is removed from the rotation;
+- **repeated failures** - the key becomes unhealthy and gets a probe request after
+  `recovery_timeout` (60 s).
 
 ### Can I control which key is used?
 
-Not directly - the rotator manages keys automatically for resilience. However, you can influence behavior:
+Choose a strategy:
 
 ```python
-# Use rotation strategies
-from apikeyrotator import create_rotation_strategy
+from apikeyrotator import APIKeyRotator
 
-# Round-robin: cycles through all keys equally
-strategy = create_rotation_strategy('round_robin', ['key1', 'key2', 'key3'])
+# Primary key first, others only as backups
+APIKeyRotator(api_keys=["primary", "backup"], rotation_strategy="failover")
 
-# Weighted: prioritizes certain keys
-strategy = create_rotation_strategy('weighted', {
-    'key1': 1,  # Used less
-    'key2': 5   # Used more
-})
+# key2 gets 5x more traffic than key1
+APIKeyRotator(api_keys=["key1", "key2"], rotation_strategy="weighted",
+              rotation_strategy_kwargs={"weights": {"key1": 1, "key2": 5}})
 ```
+
+Also available: `"random"`, `"lru"`, `"health_based"` or your own subclass of
+`BaseRotationStrategy`. See [Advanced Usage](ADVANCED_USAGE.md#rotation-strategies).
 
 ### How many retries does it attempt?
 
-By default, 3 retries per key. You can configure this:
+`max_retries` (default 3) is the number of **attempts per request**, across all
+keys. Switching away from a key rejected with 401/403 does not use up an attempt.
+Waits between attempts grow exponentially from `base_delay` (1 s) and are capped
+by `max_delay` (60 s). To bound the total time, set `total_timeout`:
 
 ```python
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    max_retries=5  # Try each key up to 5 times
-)
+rotator = APIKeyRotator(api_keys=["key1", "key2"], max_retries=5, total_timeout=30)
 ```
 
-With 2 keys and 5 retries each, that's up to 10 total attempts before failing.
+### What happens when all attempts fail?
 
-### What happens when all keys fail?
-
-An `AllKeysExhaustedError` exception is raised:
+`AllKeysExhaustedError` is raised; `e.last_response` / `e.last_exception` tell you why:
 
 ```python
 from apikeyrotator import AllKeysExhaustedError
 
 try:
     response = rotator.get(url)
-except AllKeysExhaustedError:
-    print("All API keys failed after retries")
-    # Handle accordingly - use cache, alert admin, etc.
+except AllKeysExhaustedError as e:
+    print("Failed:", e.last_response or e.last_exception)
 ```
+
+Its subclasses `DeadlineExceededError` (time budget spent) and `CircuitOpenError`
+(host considered down) are caught by the same `except`.
+
+### Are POST requests retried?
+
+Only when retrying is safe: after `429`, `503`, `408`, `425`, connection failures
+or a rejected key. After `500`/`502`/`504` or a read timeout the server may already
+have executed the request, so the response is returned (or the exception
+re-raised). Send an `Idempotency-Key` header or use `retry_non_idempotent=True` if
+your endpoint is idempotent. `GET`, `PUT`, `DELETE` are always retried.
 
 ### Can I use it with any API?
 
-Yes! APIKeyRotator works with any REST API. It automatically detects common authorization patterns:
-
-- Bearer tokens (OAuth, JWT)
-- API keys in headers
-- Basic authentication
-- Custom header formats
-
-The library learns and saves successful configurations per domain.
-
-### How do I make POST/PUT/DELETE requests?
-
-Use the same interface as the `requests` library:
+Yes. If the request has no `Authorization`/`X-API-Key` header, the rotator adds
+`Authorization: Bearer <key>` for keys starting with `sk-`/`pk-`,
+`X-API-Key: <key>` for 32-character keys, and `Authorization: Key <key>` otherwise.
+For anything else use `header_callback`:
 
 ```python
-# POST
-response = rotator.post(url, json={"key": "value"})
-
-# PUT
-response = rotator.put(url, json={"key": "value"})
-
-# DELETE
-response = rotator.delete(url)
-
-# PATCH
-response = rotator.patch(url, json={"key": "value"})
+rotator = APIKeyRotator(
+    api_keys=["key1"],
+    header_callback=lambda key, headers: {"Authorization": f"Token {key}"},
+)
 ```
+
+### How do I make POST/PUT/PATCH/DELETE requests?
+
+Same interface as `requests`: `rotator.post(url, json=...)`, `put`, `patch`,
+`delete`, `head`, or `rotator.request("OPTIONS", url)`. All keyword arguments
+(`params`, `json`, `data`, `headers`, `timeout`, `stream`...) are passed to the
+HTTP client.
 
 ### Can I pass custom headers?
 
-Yes, pass them as keyword arguments:
-
 ```python
-response = rotator.get(
-    url,
-    headers={"X-Custom-Header": "value"}
-)
+response = rotator.get(url, headers={"X-Custom-Header": "value"})
 ```
 
-Or use the `header_callback` for dynamic headers:
-
-```python
-def custom_headers(key, existing_headers):
-    return {
-        "Authorization": f"Bearer {key}",
-        "X-Client-ID": "my-app"
-    }, {}
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    header_callback=custom_headers
-)
-```
+For headers that depend on the key, use `header_callback` (it may return
+`headers` or `(headers, cookies)`).
 
 ---
 
 ## Error Handling
 
-### What errors can APIKeyRotator handle automatically?
+### What does the rotator handle automatically?
 
-- **Rate limits (429)**: Automatically switches to next key
-- **Server errors (5xx)**: Retries with exponential backoff
-- **Network errors**: Retries or switches key
-- **Authentication errors (401/403)**: Removes invalid key and tries next
+| Situation | Behaviour |
+|---|---|
+| 429 | next key immediately; waits only if every key is limited |
+| 5xx, network errors | exponential backoff |
+| 401 / 403 | key removed, next key |
+| other 4xx (404, 400, 422...) | response returned to you, no retry |
+| host keeps failing (with `circuit_breaker=True`) | fail fast with `CircuitOpenError` |
 
-### How do I handle errors in my code?
+### Why do I get a 404 response instead of an exception?
 
-Use try-except blocks:
-
-```python
-from apikeyrotator import AllKeysExhaustedError, NoAPIKeysError
-
-try:
-    rotator = APIKeyRotator()
-    response = rotator.get(url)
-    data = response.json()
-    
-except NoAPIKeysError:
-    print("No API keys configured")
-    
-except AllKeysExhaustedError:
-    print("All keys failed")
-    
-except Exception as e:
-    print(f"Unexpected error: {e}")
-```
+Because retrying a wrong URL or a malformed request can't succeed. Client errors
+are returned like with plain `requests`; call `response.raise_for_status()` if you
+want an exception.
 
 ### Why are my requests failing immediately?
 
-Common causes:
+1. **Invalid keys** - every key gets 401/403 and is removed (`rotator.key_count == 0`).
+2. **Wrong URL / parameters** - 4xx responses are returned without retries.
+3. **Wrong auth header** - the API expects a different header; use `header_callback`.
+4. **Open circuit** - the host failed repeatedly (`rotator.get_circuit_states()`).
 
-1. **Invalid API keys**: Check your keys are correct
-2. **Wrong URL**: Verify the endpoint URL
-3. **Incorrect headers**: API might require specific headers
-4. **IP restrictions**: Your IP might be blocked
+Turn on logging to see what happens:
 
-Debug by checking:
 ```python
 import logging
 logging.basicConfig(level=logging.DEBUG)
-
-rotator = APIKeyRotator(api_keys=["test_key"])
-response = rotator.get(url)
-# Check logs for detailed information
 ```
 
-### How do I customize retry logic?
+### How do I customise retry logic?
 
-Use the `should_retry_callback`:
+- Treat more statuses as temporary: `ErrorClassifier(custom_retryable_codes=[420])`.
+- Retry "successful" responses with an error in the body: `should_retry_callback`.
+- Change the rules completely: subclass `ErrorClassifier` ([Error Handling](ERROR_HANDLING.md#custom-error-handling)).
 
 ```python
-def my_retry_logic(response):
-    # Don't retry on client errors except 429
-    if 400 <= response.status_code < 500 and response.status_code != 429:
+def retry_on_soft_error(response) -> bool:
+    try:
+        return response.json().get("status") == "try_again"
+    except ValueError:
         return False
-    
-    # Retry on server errors
-    return response.status_code >= 500
 
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    should_retry_callback=my_retry_logic
-)
+rotator = APIKeyRotator(api_keys=["key1"], should_retry_callback=retry_on_soft_error)
 ```
 
 ---
 
 ## Performance
 
-### Is APIKeyRotator fast?
+### Is it fast?
 
-Yes! The overhead is minimal:
-- Connection pooling for reusing TCP connections
-- Efficient key rotation algorithms
-- No unnecessary delays (unless configured)
-
-For best performance:
-- Use async version for I/O-bound tasks
-- Enable connection pooling (enabled by default)
-- Minimize `random_delay_range` if not needed
+The rotator adds about **10 µs of CPU per request** and ~1 µs to select a key
+(even with 1000 keys); it uses ~230 bytes of memory per key and doesn't grow under
+sustained load. Importing the library takes ~70 ms. Numbers and methodology:
+[benchmarks](../benchmarks/README.md). Your throughput is limited by the API and the
+network, not by the rotator.
 
 ### Should I use sync or async?
 
-**Use Synchronous (`APIKeyRotator`)** when:
-- Making sequential requests
-- Simple scripts or applications
-- Working with synchronous code
+- **`APIKeyRotator`** (sync): scripts, sequential work, sync web frameworks. It is
+  thread-safe - share one instance between threads.
+- **`AsyncAPIKeyRotator`**: many concurrent requests, asyncio applications.
 
-**Use Asynchronous (`AsyncAPIKeyRotator`)** when:
-- Making many concurrent requests
-- Building async applications
-- Need maximum throughput
-
-Example performance comparison:
 ```python
-# Sync: 100 requests = ~100 seconds (sequential)
+# Sequential: total time ≈ sum of latencies
 for i in range(100):
-    response = rotator.get(url)
+    rotator.get(url)
 
-# Async: 100 requests = ~5 seconds (concurrent)
-tasks = [rotator.get(url) for _ in range(100)]
-responses = await asyncio.gather(*tasks)
+# Concurrent: total time ≈ a few latencies
+responses = await asyncio.gather(*(async_rotator.get(url) for _ in range(100)))
 ```
 
-### How many requests can I make per second?
+### How many requests per second can I make?
 
-This depends on:
-1. Your API's rate limits
-2. Number of keys you have
-3. Network latency
-4. `random_delay_range` setting
+As many as your keys' rate limits allow. To use them fully:
 
-To maximize throughput:
 ```python
 rotator = APIKeyRotator(
-    api_keys=["key1", "key2", "key3"],  # More keys
-    max_retries=2,  # Fewer retries
-    base_delay=0.5,  # Shorter delays
-    random_delay_range=None,  # No artificial delays
-    timeout=5.0  # Quick timeout
+    api_keys=["key1", "key2", "key3"],
+    key_rate_limit=(60, 60),   # match the provider's per-key quota - no 429s
+    random_delay_range=None,
+    timeout=5.0,
 )
 ```
 
 ### Does it cache responses?
 
-No, APIKeyRotator does not cache responses by default. You can implement caching yourself:
+Not by default. Add `CachingMiddleware`:
 
 ```python
-from functools import lru_cache
+from apikeyrotator import APIKeyRotator, CachingMiddleware
 
-@lru_cache(maxsize=100)
-def cached_get(url):
-    return rotator.get(url).json()
+rotator = APIKeyRotator(api_keys=["key1"], middlewares=[CachingMiddleware(ttl=300)])
 ```
-
-Or use a caching library like `requests-cache`.
 
 ---
 
 ## Advanced Topics
 
-### Can I use it with proxies?
-
-Yes! Pass a list of proxies:
+### Can I use proxies?
 
 ```python
 rotator = APIKeyRotator(
     api_keys=["key1", "key2"],
-    proxy_list=[
-        "http://user:pass@proxy1.com:8080",
-        "http://user:pass@proxy2.com:8080"
-    ]
+    proxy_list=["http://user:pass@proxy1.com:8080", "http://user:pass@proxy2.com:8080"],
 )
 ```
 
-Each request will use a different proxy from the list.
+Each attempt uses the next proxy.
 
 ### How do I rotate User-Agents?
 
-Pass a list of User-Agent strings:
-
-```python
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)..."
-]
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    user_agents=USER_AGENTS
-)
-```
+`user_agents=[...]` - each request gets the next one unless it sets `User-Agent` itself.
 
 ### Can I add delays between requests?
 
-Yes, use `random_delay_range`:
-
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    random_delay_range=(1.0, 3.0)  # 1-3 seconds delay
-)
-```
-
-Each request will wait a random time in this range before executing.
+`random_delay_range=(1.0, 3.0)` waits a random 1-3 s (+ up to 10% jitter) before
+each attempt.
 
 ### How do I use custom error classification?
 
-Create a custom `ErrorClassifier`:
-
 ```python
-from apikeyrotator import ErrorClassifier, ErrorType
+from apikeyrotator import APIKeyRotator, ErrorClassifier, ErrorType
 
 class MyErrorClassifier(ErrorClassifier):
     def classify_error(self, response=None, exception=None):
-        if response and response.status_code == 418:  # I'm a teapot
+        # "is not None": error responses of requests are falsy
+        if response is not None and response.status_code == 418:
             return ErrorType.TEMPORARY
         return super().classify_error(response, exception)
 
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    error_classifier=MyErrorClassifier()
-)
+rotator = APIKeyRotator(api_keys=["key1"], error_classifier=MyErrorClassifier())
 ```
 
 ### Can I use it in a multithreaded application?
 
-Yes, but create separate instances per thread:
+Yes - **share one rotator** between threads. It is thread-safe, and sharing means
+all threads see the same key health, rate limits and connection pool:
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
+from apikeyrotator import APIKeyRotator
 
-def worker(thread_id, keys):
-    rotator = APIKeyRotator(api_keys=keys)
-    return rotator.get(url).json()
+rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"], pool_size=32)
 
-with ThreadPoolExecutor(max_workers=4) as executor:
-    futures = [
-        executor.submit(worker, i, get_keys_for_thread(i))
-        for i in range(4)
-    ]
-    results = [f.result() for f in futures]
+def fetch(i: int) -> dict:
+    return rotator.get(f"https://api.example.com/items/{i}").json()
+
+with ThreadPoolExecutor(max_workers=16) as executor:
+    results = list(executor.map(fetch, range(100)))
 ```
 
-For I/O-bound tasks, async is usually better than threads.
+For several **processes** or machines, add `state_backend=RedisStateBackend(...)`
+so they share limits and rejected keys ([Resilience](RESILIENCE.md)).
+
+### Can I switch to another API provider when one fails?
+
+Yes, with `FallbackRouter`:
+
+```python
+from apikeyrotator import APIKeyRotator, FallbackRouter, ProviderRoute
+
+router = FallbackRouter([
+    ProviderRoute(APIKeyRotator(api_keys=["a1", "a2"]), name="provider-a"),
+    ProviderRoute(APIKeyRotator(api_keys=["b1"]), name="provider-b",
+                  request_transformer=lambda m, u, kw: (m, u.replace("api.a.com", "api.b.com"), kw)),
+])
+response = router.get("https://api.a.com/v1/data")
+```
 
 ### How do I disable .env file loading?
 
-Set `load_env_file=False`:
+`APIKeyRotator(api_keys=[...], load_env_file=False)`.
 
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    load_env_file=False  # Don't load .env
-)
-```
+### What is the configuration file for?
 
-### Where is the configuration file stored?
-
-By default, `rotator_config.json` in the current directory. Customize:
-
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    config_file="/path/to/my/config.json"
-)
-```
-
-### Can I disable configuration persistence?
-
-Yes, provide a no-op config loader:
-
-```python
-from apikeyrotator import ConfigLoader
-
-class NoOpConfigLoader(ConfigLoader):
-    def save_config(self):
-        pass
-    def load_config(self):
-        return {}
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    config_loader=NoOpConfigLoader(config_file="", logger=None)
-)
-```
+`config_file` (default `rotator_config.json`) is only **read**, never written. With
+`save_sensitive_headers=True` its `successful_headers` section adds extra headers
+per domain (auth headers in it are ignored). If the file doesn't exist, nothing
+happens - no need to disable anything.
 
 ### How do I enable debug logging?
 
-Configure Python's logging:
-
 ```python
 import logging
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-rotator = APIKeyRotator(api_keys=["key1"])
-# Now you'll see detailed logs
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 ```
+
+Keys are masked in logs (`key1****`). The library itself never prints anything
+until logging is configured.
 
 ### Can I use it with GraphQL APIs?
 
-Yes! GraphQL uses POST requests:
+Yes - GraphQL queries are POSTs. Since queries are read-only, allow retrying them:
 
 ```python
-rotator = APIKeyRotator(api_keys=["key1"])
-
-query = """
-query GetUser($id: ID!) {
-    user(id: $id) { name email }
-}
-"""
-
+rotator = APIKeyRotator(api_keys=["key1"], retry_non_idempotent=True)
 response = rotator.post(
     "https://api.example.com/graphql",
-    json={
-        "query": query,
-        "variables": {"id": "123"}
-    }
+    json={"query": "query($id: ID!) { user(id: $id) { name } }", "variables": {"id": "123"}},
 )
-
-data = response.json()
+data = response.json()["data"]
 ```
 
-### Is it compatible with requests-mock for testing?
+### Is it compatible with requests-mock / respx for testing?
 
-Yes:
+Yes. `requests-mock` works with the default sync backend; for the httpx backend
+pass a mock transport: `http_client_kwargs={"transport": httpx.MockTransport(handler)}`.
 
 ```python
 import requests_mock
@@ -548,28 +393,20 @@ from apikeyrotator import APIKeyRotator
 
 def test_api_call():
     with requests_mock.Mocker() as m:
-        m.get('https://api.example.com/data', json={'result': 'success'})
-        
-        rotator = APIKeyRotator(api_keys=["test_key"])
-        response = rotator.get('https://api.example.com/data')
-        
-        assert response.json() == {'result': 'success'}
+        m.get("https://api.example.com/data", json={"result": "success"})
+        rotator = APIKeyRotator(api_keys=["test_key"], load_env_file=False)
+        assert rotator.get("https://api.example.com/data").json() == {"result": "success"}
 ```
 
-### How do I contribute to the project?
+### How do I contribute?
 
-1. Fork the repository on GitHub
-2. Create a feature branch
-3. Make your changes with tests
-4. Submit a pull request
-
-See the [GitHub repository](https://github.com/PrimeevolutionZ/apikeyrotator) for more details.
+See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 
 ## Still have questions?
 
-- Check the [Documentation Index](INDEX.md)
-- Read the [API Reference](API_REFERENCE.md)
-- See [Examples](EXAMPLES.md)
-- Open an issue on [GitHub](https://github.com/PrimeevolutionZ/apikeyrotator/issues)
+- [Documentation Index](INDEX.md)
+- [API Reference](API_REFERENCE.md)
+- [Examples](EXAMPLES.md)
+- [GitHub Issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues)

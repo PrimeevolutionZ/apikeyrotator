@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from apikeyrotator.strategies import (
+    FailoverRotationStrategy,
     HealthBasedStrategy,
     KeyMetrics,
     LRURotationStrategy,
@@ -444,3 +445,34 @@ class TestStrategyFactory:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+class TestFailoverStrategy:
+    """Test FailoverRotationStrategy (priority order with backups)."""
+
+    def test_uses_primary_while_available(self):
+        strategy = create_rotation_strategy('failover', ['primary', 'backup'])
+        metrics = {k: KeyMetrics(k) for k in ('primary', 'backup')}
+        assert {strategy.get_next_key(metrics) for _ in range(5)} == {'primary'}
+
+    def test_falls_back_and_returns(self):
+        strategy = FailoverRotationStrategy(['primary', 'b1', 'b2'])
+        metrics = {k: KeyMetrics(k) for k in ('primary', 'b1', 'b2')}
+        metrics['primary'].mark_rate_limited(time.time() + 60)
+        assert strategy.get_next_key(metrics) == 'b1'
+        metrics['b1'].is_healthy = False
+        assert strategy.get_next_key(metrics) == 'b2'
+        metrics['primary'].rate_limit_reset = 0.0
+        assert strategy.get_next_key(metrics) == 'primary'
+
+    def test_all_unavailable_uses_first(self):
+        strategy = FailoverRotationStrategy(['a', 'b'])
+        metrics = {k: KeyMetrics(k) for k in ('a', 'b')}
+        for m in metrics.values():
+            m.mark_rate_limited(time.time() + 60)
+        assert strategy.get_next_key(metrics) == 'a'
+
+    def test_enum_values_all_implemented(self):
+        from apikeyrotator.strategies import RotationStrategy
+        for member in RotationStrategy:
+            keys = {'k1': 1.0} if member is RotationStrategy.WEIGHTED else ['k1']
+            assert create_rotation_strategy(member, keys).get_next_key() == 'k1'

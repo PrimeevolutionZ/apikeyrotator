@@ -1,6 +1,8 @@
 # Advanced Usage
 
-This guide covers advanced features and configuration options for power users.
+Advanced features and configuration for power users. For production resilience
+(deadlines, circuit breaker, client-side rate limits, Redis, httpx) see
+[Resilience & Scaling](RESILIENCE.md).
 
 ## Table of Contents
 
@@ -11,468 +13,302 @@ This guide covers advanced features and configuration options for power users.
 - [Custom Callbacks](#custom-callbacks)
 - [Anti-Bot Evasion](#anti-bot-evasion)
 - [Custom Error Classification](#custom-error-classification)
-- [Session Management](#session-management)
-- [Configuration Management](#configuration-management)
-- [Performance Optimization](#performance-optimization)
+- [Connections and Cleanup](#connections-and-cleanup)
+- [Configuration File](#configuration-file)
+- [Performance](#performance)
+- [Best Practices](#best-practices)
 
 ---
 
 ## Middleware System
 
-APIKeyRotator 0.4.3+ includes a powerful middleware system for intercepting and processing requests/responses.
-
-### Overview
-
-Middleware allows you to:
-- Cache responses to reduce API calls
-- Log requests and responses
-- Track and handle rate limits
-- Implement custom retry logic
-- Modify headers dynamically
-- Collect detailed metrics
+Middleware intercepts every attempt: before the request, after the response and
+on errors. Use it to cache responses, log traffic, track rate limits or modify
+headers.
 
 **[📖 Complete Middleware Guide →](MIDDLEWARE.md)**
 
 ### Quick Example
 
 ```python
-from apikeyrotator import APIKeyRotator
-from apikeyrotator.middleware import (
-    CachingMiddleware,
-    LoggingMiddleware,
-    RateLimitMiddleware
-)
+import logging
+from apikeyrotator import APIKeyRotator, CachingMiddleware, LoggingMiddleware, RateLimitMiddleware
 
-# Create middleware instances
-cache = CachingMiddleware(ttl=600, max_cache_size=1000)
-logger = LoggingMiddleware(verbose=True)
-rate_limit = RateLimitMiddleware(pause_on_limit=True)
+logging.basicConfig(level=logging.INFO)   # needed to see LoggingMiddleware output
 
-# Initialize rotator with middleware
 rotator = APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
-    middlewares=[cache, logger, rate_limit]
+    middlewares=[
+        CachingMiddleware(ttl=600, max_cache_size=1000),
+        LoggingMiddleware(verbose=True),
+        RateLimitMiddleware(pause_on_limit=True),
+    ],
 )
 
-# Middleware automatically:
-# - Caches responses
-# - Logs all requests
-# - Handles rate limits
-response = rotator.get("https://api.example.com/data")
+response = rotator.get("https://api.example.com/data")   # logged, cached for 10 minutes
 ```
+
+Middlewares run in list order. A `before_request` hook that returns a response
+(like a cache hit) stops the chain and no HTTP request is made.
 
 ### Built-in Middleware
 
 #### CachingMiddleware
 
-Cache responses to reduce API calls:
-
 ```python
-from apikeyrotator.middleware import CachingMiddleware
+from apikeyrotator import APIKeyRotator, CachingMiddleware
 
 cache = CachingMiddleware(
-    ttl=300,              # Cache for 5 minutes
-    cache_only_get=True,  # Only cache GET requests
-    max_cache_size=1000   # Store up to 1000 responses
+    ttl=300,               # seconds
+    cache_only_get=True,   # only GET requests
+    max_cache_size=1000,   # entries (LRU eviction)
 )
+rotator = APIKeyRotator(api_keys=["key1"], middlewares=[cache])
 
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[cache]
-)
-
-# View cache statistics
 stats = cache.get_stats()
-print(f"Hit rate: {stats['hit_rate']:.2%}")
-print(f"Cache size: {stats['cache_size']}/{stats['max_cache_size']}")
+print(f"Hit rate: {stats['hit_rate']:.2%}, entries: {stats['cache_size']}, bytes: {stats['size_bytes']}")
 
-# Clear cache if needed
-cache.clear_cache()
+cache.clear()
 ```
+
+Only `2xx` responses are cached; responses with `Set-Cookie` or
+`Cache-Control: no-store/private` are not. Query `params` are part of the cache key.
 
 #### LoggingMiddleware
 
-Detailed request/response logging:
-
 ```python
-from apikeyrotator.middleware import LoggingMiddleware
-
-logger = LoggingMiddleware(
-    verbose=True,           # Include detailed info
-    log_response_time=True, # Log request duration
-    max_key_chars=4         # Show only first 4 chars of key
-)
+from apikeyrotator import APIKeyRotator, LoggingMiddleware
 
 rotator = APIKeyRotator(
     api_keys=["key1"],
-    middlewares=[logger]
+    middlewares=[LoggingMiddleware(verbose=True, log_response_time=True, max_key_chars=4)],
 )
 
-# Automatically logs:
 # 📤 GET https://api.example.com/data (key: key1****, attempt: 1)
-# 📥 ✅ 200 from https://api.example.com/data (0.234s)
+# 📥 ✅ 200 from https://api.example.com/data (key: key1****) (0.234s)
 ```
+
+Sensitive headers (`Authorization`, `X-API-Key`, `Cookie`) are redacted.
 
 #### RateLimitMiddleware
 
-Automatic rate limit tracking:
-
 ```python
-from apikeyrotator.middleware import RateLimitMiddleware
+from apikeyrotator import APIKeyRotator, RateLimitMiddleware
 
-rate_limit = RateLimitMiddleware(
-    pause_on_limit=True,  # Wait when rate limited
-    max_tracked_keys=100
-)
+rate_limit = RateLimitMiddleware(pause_on_limit=True, max_wait=60)
+rotator = APIKeyRotator(api_keys=["key1", "key2"], middlewares=[rate_limit])
 
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    middlewares=[rate_limit]
-)
-
-# Middleware automatically:
-# - Extracts rate limit info from headers
-# - Waits when limits are hit
-# - Tracks limits per key
+print(rate_limit.get_stats())   # {'tracked_keys': ..., 'active_limits': ..., 'max_tracked_keys': ...}
 ```
 
-> **Note:** `RetryMiddleware` was removed in 0.6.1 — retries are built into the rotator
-> (`max_retries`, `base_delay`, `max_delay`). Rate-limited keys are skipped automatically
-> using `Retry-After`, so no extra middleware is needed.
+The rotator already parks keys that return `429` or `X-RateLimit-Remaining: 0`
+and switches to other keys. This middleware additionally *waits* (up to
+`max_wait` seconds) when the selected key's quota is used up - useful with a
+single key.
+
+> `RetryMiddleware` was removed in 0.6.1 - retries are built into the rotator
+> (`max_retries`, `base_delay`, `max_delay`, `total_timeout`).
 
 ### Custom Middleware
 
-Create your own middleware:
+Subclass `RotatorMiddleware` and implement the hooks you need. Sync rotators call
+the `*_sync` hooks; async rotators call the coroutine versions, which by default
+delegate to the sync ones - so implementing `*_sync` covers both.
 
 ```python
-from apikeyrotator.middleware import RequestInfo, ResponseInfo, ErrorInfo
+import uuid
+from apikeyrotator import APIKeyRotator, RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
 
-class CustomHeaderMiddleware:
-    """Add custom headers to all requests."""
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        request_info.headers["X-Client-Version"] = "2.0"
-        request_info.headers["X-Request-ID"] = generate_id()
+class RequestIdMiddleware(RotatorMiddleware):
+    """Adds a request id and reports failures."""
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+        request_info.headers["X-Request-ID"] = str(uuid.uuid4())
         return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        print(f"Response: {response_info.status_code}")
-        return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        print(f"Error: {error_info.exception}")
-        return False  # Don't handle, let rotator retry
 
-# Use custom middleware
-custom = CustomHeaderMiddleware()
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[custom]
-)
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
+        print(f"{response_info.status_code} in {response_info.response_time:.3f}s")
+        return response_info
+
+    def on_error_sync(self, error_info: ErrorInfo) -> bool:
+        print(f"Attempt {error_info.request_info.attempt + 1} failed: {error_info.exception}")
+        return False
+
+rotator = APIKeyRotator(api_keys=["key1"], middlewares=[RequestIdMiddleware()])
 ```
 
-**[📖 Learn More About Middleware →](MIDDLEWARE.md)**
+Override the `async def before_request / after_request / on_error` methods only
+if the async version needs to `await` something.
 
 ---
 
 ## Rotation Strategies
 
-Control how keys are selected for each request.
+The strategy decides which key each attempt uses. All strategies skip keys that
+are rate-limited or unhealthy (an unhealthy key gets a probe request again
+`recovery_timeout` seconds after its last failure, 60 s by default).
 
-### Available Strategies
-
-#### Round Robin (Default)
-
-Cycles through keys sequentially:
+| Strategy | Use when |
+|---|---|
+| `"round_robin"` (default) | Keys are equal - spread load evenly. |
+| `"random"` | Avoid predictable patterns. |
+| `"weighted"` | Keys have different quotas. |
+| `"lru"` | Keep all keys "warm"; least recently used goes next. |
+| `"health_based"` | Keys fail independently; exclude failing ones with your own threshold. |
+| `"failover"` | One primary key, others only as backups. |
 
 ```python
 from apikeyrotator import APIKeyRotator
 
-rotator = APIKeyRotator(
+# Round robin: key1 -> key2 -> key3 -> key1 ...
+APIKeyRotator(api_keys=["key1", "key2", "key3"], rotation_strategy="round_robin")
+
+# Weighted: key3 gets 60% of requests, key2 30%, key1 10%
+APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
-    rotation_strategy="round_robin"
+    rotation_strategy="weighted",
+    rotation_strategy_kwargs={"weights": {"key1": 1, "key2": 3, "key3": 6}},
 )
 
-# Keys used in order: key1 → key2 → key3 → key1 → ...
-```
-
-#### Random
-
-Selects keys randomly:
-
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2", "key3"],
-    rotation_strategy="random"
-)
-
-# Each request uses a random key
-```
-
-#### Weighted
-
-Prioritize certain keys:
-
-```python
-from apikeyrotator import APIKeyRotator, create_rotation_strategy
-
-# Create weighted strategy
-strategy = create_rotation_strategy('weighted', {
-    'key1': 1,  # Low priority (10%)
-    'key2': 3,  # Medium priority (30%)
-    'key3': 6   # High priority (60%)
-})
-
-rotator = APIKeyRotator(
-    api_keys=strategy.keys(),
-    rotation_strategy=strategy
-)
-```
-
-#### LRU (Least Recently Used)
-
-Selects the least recently used key:
-
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2", "key3"],
-    rotation_strategy="lru"
-)
-
-# Always uses the key that hasn't been used in the longest time
-```
-
-#### Health-Based
-
-Only uses healthy keys:
-
-```python
-rotator = APIKeyRotator(
+# Health-based: exclude a key after 5 consecutive failures, recheck after 5 minutes
+APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
     rotation_strategy="health_based",
-    rotation_strategy_kwargs={
-        'failure_threshold': 5,       # Mark unhealthy after 5 failures
-        'health_check_interval': 300  # Recheck every 5 minutes
-    }
+    rotation_strategy_kwargs={"failure_threshold": 5, "health_check_interval": 300},
 )
 
-# Automatically excludes failing keys
-# Re-checks unhealthy keys periodically
+# Failover: always "primary" while it works
+APIKeyRotator(api_keys=["primary", "backup1", "backup2"], rotation_strategy="failover")
+
+# Probe unhealthy keys sooner / never
+APIKeyRotator(api_keys=["key1", "key2"], recovery_timeout=10)
 ```
 
 ### Custom Strategy
 
-Create your own rotation strategy:
-
 ```python
-from apikeyrotator.strategies import BaseRotationStrategy, KeyMetrics
-from typing import Dict, Optional
+from apikeyrotator import APIKeyRotator, BaseRotationStrategy, KeyMetrics
 
-class PriorityRotationStrategy(BaseRotationStrategy):
-    """Prioritize keys based on success rate."""
-    
-    def __init__(self, keys):
-        super().__init__(keys)
-    
-    def get_next_key(
-        self,
-        current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
-    ) -> str:
+class BestSuccessRateStrategy(BaseRotationStrategy):
+    """Use the available key with the highest success rate."""
+
+    def get_next_key(self, current_key_metrics: dict[str, KeyMetrics] | None = None) -> str:
+        candidates = self._get_healthy_keys(current_key_metrics)  # skips limited/unhealthy keys
         if not current_key_metrics:
-            return self._keys[0]
-        
-        # Select key with highest success rate
-        best_key = max(
-            current_key_metrics.items(),
-            key=lambda x: x[1].success_rate
-        )
-        return best_key[0]
+            return candidates[0]
+        return max(candidates, key=lambda k: current_key_metrics[k].success_rate)
 
-# Use custom strategy
-strategy = PriorityRotationStrategy(['key1', 'key2', 'key3'])
 rotator = APIKeyRotator(
-    api_keys=['key1', 'key2', 'key3'],
-    rotation_strategy=strategy
+    api_keys=["key1", "key2", "key3"],
+    rotation_strategy=BestSuccessRateStrategy(["key1", "key2", "key3"]),
 )
 ```
+
+The rotator passes its live metrics (`{key: KeyMetrics}`) on every call and calls
+`update_keys()` when keys are added or removed.
 
 ---
 
 ## Metrics and Monitoring
 
-Track and monitor rotator performance.
-
-### Enable Metrics
+Metrics are enabled by default (`enable_metrics=True`).
 
 ```python
 from apikeyrotator import APIKeyRotator
 
-# Metrics enabled by default
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2", "key3"],
-    enable_metrics=True
-)
-
-# Make requests...
+rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"])
 for i in range(100):
     rotator.get(f"https://api.example.com/data/{i}")
 
-# Get overall metrics
 metrics = rotator.get_metrics()
-print(f"Total requests: {metrics['total_requests']}")
+print(f"Total requests: {metrics['total_requests']}")      # every attempt counts
 print(f"Success rate: {metrics['success_rate']:.2%}")
 print(f"Uptime: {metrics['uptime_seconds']:.1f}s")
+
+# Endpoints are URLs without the query string (bounded memory)
+for endpoint, stats in metrics["endpoint_stats"].items():
+    print(endpoint, stats["total_requests"], f"{stats['avg_response_time']:.3f}s")
 ```
 
 ### Per-Key Statistics
 
 ```python
-# Get statistics for each key
-key_stats = rotator.get_key_statistics()
-
-for key, stats in key_stats.items():
-    print(f"\nKey: {key[:4]}****")
-    print(f"  Requests: {stats['total_requests']}")
-    print(f"  Success rate: {stats['success_rate']:.2%}")
-    print(f"  Avg response time: {stats['avg_response_time']:.3f}s")
-    print(f"  Healthy: {'✅' if stats['is_healthy'] else '❌'}")
-    print(f"  Rate limit hits: {stats['rate_limit_hits']}")
-```
-
-### Per-Endpoint Statistics
-
-```python
-metrics = rotator.get_metrics()
-
-for endpoint, stats in metrics['endpoint_stats'].items():
-    print(f"\nEndpoint: {endpoint}")
-    print(f"  Total requests: {stats['total_requests']}")
-    print(f"  Successful: {stats['successful_requests']}")
-    print(f"  Failed: {stats['failed_requests']}")
-    print(f"  Avg time: {stats['avg_response_time']:.3f}s")
+for key, stats in rotator.get_key_statistics().items():
+    print(f"{key[:4]}****: {stats['total_requests']} requests, "
+          f"success {stats['success_rate']:.0%}, "
+          f"avg {stats['avg_response_time']:.3f}s, "
+          f"{'healthy' if stats['is_healthy'] else 'UNHEALTHY'}, "
+          f"429s: {stats['rate_limit_hits']}")
 ```
 
 ### Prometheus Export
 
-Export metrics in Prometheus format:
-
 ```python
-from apikeyrotator.metrics import PrometheusExporter
+from apikeyrotator import PrometheusExporter
 
-# Make requests
-rotator = APIKeyRotator(api_keys=["key1", "key2"])
-for i in range(100):
-    rotator.get(f"https://api.example.com/data/{i}")
+text = PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_statistics())
 
-# Export to Prometheus format
-exporter = PrometheusExporter()
-metrics_text = exporter.export(rotator.metrics)
-
-# Save to file for node_exporter
-with open('/var/lib/prometheus/node_exporter/rotator.prom', 'w') as f:
-    f.write(metrics_text)
+with open("/var/lib/node_exporter/textfile/rotator.prom", "w") as f:   # textfile collector
+    f.write(text)
 ```
+
+Keys are masked in labels (`key="sk-1****"`).
 
 ### Export Configuration
 
-```python
-# Export current configuration
-config = rotator.export_config()
+`export_config()` returns settings and per-key statistics with masked keys - safe to log:
 
-print(f"Keys: {config['keys_count']}")
-print(f"Strategy: {config['rotation_strategy']}")
-print(f"Max retries: {config['max_retries']}")
-print(f"Metrics enabled: {config['enable_metrics']}")
+```python
+config = rotator.export_config()
+print(config["keys_count"], config["strategy"], config["max_retries"], config["metrics_enabled"])
+```
+
+### Circuit breaker state
+
+```python
+rotator = APIKeyRotator(api_keys=["key1"], circuit_breaker=True)
+print(rotator.get_circuit_states())   # {'api.example.com': 'CLOSED'}
 ```
 
 ---
 
 ## Secret Providers
 
-Load API keys from external secret management systems.
-
-### AWS Secrets Manager
+Load keys from a secret store instead of code or environment variables.
 
 ```python
-from apikeyrotator import APIKeyRotator
-from apikeyrotator.providers import AWSSecretsManagerProvider
+from apikeyrotator import APIKeyRotator, AWSSecretsManagerProvider
 
-# Create provider
-provider = AWSSecretsManagerProvider(
-    secret_name="my-api-keys",
-    region_name="us-east-1"
+provider = AWSSecretsManagerProvider(secret_name="prod/api-keys", region_name="us-east-1")
+
+rotator = APIKeyRotator(
+    secret_provider=provider,
+    auto_refresh_interval=300,   # reload every 5 minutes in the background
 )
-
-# Initialize rotator with provider
-rotator = APIKeyRotator(secret_provider=provider)
-
-# Keys are automatically loaded from AWS
 response = rotator.get("https://api.example.com/data")
 
-# Refresh keys periodically
-import asyncio
-
-async def refresh_keys():
-    await rotator.refresh_keys_from_provider()
-    print("Keys refreshed from AWS")
-
-asyncio.run(refresh_keys())
+# Manual refresh
+rotator.refresh_keys_from_provider_sync()        # or: await rotator.refresh_keys_from_provider()
 ```
 
-**Requires:** `pip install boto3`
-
-### Google Cloud Secret Manager
+Requires `pip install "apikeyrotator[aws]"`. The secret may be a JSON array, a JSON
+object (`{"keys": [...]}`, `{"api_keys": [...]}` or `{"name": "key", ...}`) or a
+comma-separated string.
 
 ```python
-from apikeyrotator.providers import GCPSecretManagerProvider
-
-provider = GCPSecretManagerProvider(
-    project_id="my-project",
-    secret_id="api-keys",
-    version_id="latest"
+from apikeyrotator import (
+    GCPSecretManagerProvider, FileSecretProvider, EnvironmentSecretProvider, create_secret_provider,
 )
 
-rotator = APIKeyRotator(secret_provider=provider)
+GCPSecretManagerProvider(project_id="my-project", secret_id="api-keys")   # pip install "apikeyrotator[gcp]"
+FileSecretProvider(file_path="keys.txt")      # JSON array, CSV and/or one key per line, '#' comments
+EnvironmentSecretProvider(env_var="MY_API_KEYS")
+create_secret_provider("aws", secret_name="prod/api-keys")
 ```
 
-**Requires:** `pip install google-cloud-secret-manager`
-
-### File Provider
-
-```python
-from apikeyrotator.providers import FileSecretProvider
-
-# From JSON file: ["key1", "key2", "key3"]
-# From CSV: key1,key2,key3
-# From text: one key per line
-provider = FileSecretProvider(file_path="keys.json")
-
-rotator = APIKeyRotator(secret_provider=provider)
-```
-
-### Environment Provider
-
-```python
-from apikeyrotator.providers import EnvironmentSecretProvider
-
-provider = EnvironmentSecretProvider(env_var="MY_API_KEYS")
-rotator = APIKeyRotator(secret_provider=provider)
-```
-
-### Factory Function
-
-```python
-from apikeyrotator.providers import create_secret_provider
-
-# Create any provider via factory
-provider = create_secret_provider(
-    'aws_secrets_manager',
-    secret_name='my-keys',
-    region_name='us-east-1'
-)
-
-rotator = APIKeyRotator(secret_provider=provider)
-```
+Keys that were rejected with 401/403 are not re-added by a refresh; metrics of keys
+that stay are preserved. A custom provider is any object with
+`async get_keys()` and `async refresh_keys()` returning `list[str]`.
 
 ---
 
@@ -480,529 +316,227 @@ rotator = APIKeyRotator(secret_provider=provider)
 
 ### Custom Retry Logic
 
-Define your own conditions for retrying requests:
+`should_retry_callback` is consulted for responses the rotator would otherwise
+return (2xx/3xx). Sync rotators pass the response, async rotators the status code.
 
 ```python
-from apikeyrotator import APIKeyRotator
 import requests
+from apikeyrotator import APIKeyRotator
 
 def should_retry(response: requests.Response) -> bool:
-    """
-    Custom retry logic based on response content.
-    """
-    # Retry on rate limit
-    if response.status_code == 429:
-        return True
-    
-    # Retry if response contains error indicator
+    """Retry when the API reports a temporary error in a 200 response."""
     try:
         data = response.json()
-        if data.get('status') == 'error' and data.get('code') == 'temporary':
-            return True
-    except:
-        pass
-    
-    return False
+    except ValueError:
+        return False
+    return data.get("status") == "error" and data.get("code") == "temporary"
 
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    should_retry_callback=should_retry
-)
+rotator = APIKeyRotator(api_keys=["key1", "key2"], should_retry_callback=should_retry)
 ```
 
-### Dynamic Header Generation
+429/5xx/401/403 are already handled by the rotator; the callback does not need to
+cover them.
 
-Generate headers and cookies dynamically for each request:
+### Dynamic Headers and Cookies
 
 ```python
-from typing import Dict, Tuple, Optional
 import time
+from apikeyrotator import APIKeyRotator
 
-def generate_headers(
-    key: str, 
-    existing_headers: Optional[Dict]
-) -> Tuple[Dict, Dict]:
-    """
-    Generate custom headers and cookies.
-    
-    Returns:
-        Tuple of (headers, cookies)
-    """
+def generate_headers(key: str, existing_headers: dict | None) -> tuple[dict, dict]:
     headers = {
-        "X-API-Key": key,
-        "X-Client-Version": "2.0",
-        "X-Request-ID": generate_request_id(),
-        "X-Timestamp": str(int(time.time()))
+        "X-API-Key": key,                   # replaces the default Authorization header
+        "X-Timestamp": str(int(time.time())),
     }
-    
-    cookies = {
-        "session_token": get_session_token(key),
-        "preference": "json"
-    }
-    
+    cookies = {"preference": "json"}
     return headers, cookies
 
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    header_callback=generate_headers
-)
+rotator = APIKeyRotator(api_keys=["key1", "key2"], header_callback=generate_headers)
 ```
 
-**Note:** If your callback returns only headers (not a tuple), cookies will be empty:
-
-```python
-def simple_headers(key: str, existing: Optional[Dict]) -> Dict:
-    """Return only headers."""
-    return {
-        "X-API-Key": key,
-        "X-Client": "MyApp"
-    }
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    header_callback=simple_headers
-)
-```
+The callback may also return just a headers `dict`. When it sets `Authorization`
+or `X-API-Key`, the rotator does not add its default auth header.
 
 ---
 
 ## Anti-Bot Evasion
 
-Avoid detection and bypass anti-bot measures.
-
-### User-Agent Rotation
-
-Rotate through different browser user agents:
-
 ```python
+from apikeyrotator import APIKeyRotator
+
 USER_AGENTS = [
-    # Chrome on Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    
-    # Firefox on macOS
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) "
-    "Gecko/20100101 Firefox/121.0",
-    
-    # Safari on macOS
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-    
-    # Chrome on Android
-    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
 ]
-
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    user_agents=USER_AGENTS
-)
-
-# Each request uses a different User-Agent
-```
-
-### Random Delays
-
-Add human-like delays between requests:
-
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    random_delay_range=(0.5, 2.5)  # Random delay between 0.5-2.5 seconds
-)
-
-# Each request will have a random delay before execution
-for i in range(100):
-    response = rotator.get(f"https://api.example.com/item/{i}")
-```
-
-**Delay calculation:** Random value between min and max, plus 0-10% jitter to avoid patterns.
-
-### Proxy Rotation
-
-Distribute requests across multiple proxy servers:
-
-```python
 PROXIES = [
     "http://user:pass@proxy1.example.com:8080",
     "http://user:pass@proxy2.example.com:8080",
-    "socks5://user:pass@proxy3.example.com:1080"
 ]
 
 rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    proxy_list=PROXIES
-)
-
-# Each request uses a different proxy
-response = rotator.get("https://api.example.com/data")
-```
-
-### Combined Anti-Bot Strategy
-
-Combine all anti-bot features:
-
-```python
-rotator = APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
-    user_agents=USER_AGENTS,
-    random_delay_range=(1.0, 3.0),
-    proxy_list=PROXIES,
-    max_retries=5,
-    base_delay=2.0
+    user_agents=USER_AGENTS,        # next UA per request (unless the request sets one)
+    random_delay_range=(1.0, 3.0),  # random pause before each attempt (+ up to 10% jitter)
+    proxy_list=PROXIES,             # next proxy per attempt
 )
-
-# Now you have:
-# ✓ Multiple API keys
-# ✓ Rotating User-Agents
-# ✓ Random delays
-# ✓ Rotating proxies
-# ✓ Smart retry logic
 ```
+
+SOCKS proxies (`socks5://...`) need `pip install "requests[socks]"` with the
+requests backend; aiohttp does not support SOCKS natively (use the httpx backend
+with `pip install "httpx[socks]"`). The random delay counts towards `total_timeout`.
 
 ---
 
 ## Custom Error Classification
 
-Implement custom error classification logic:
+Subclass `ErrorClassifier` to adapt to an API's conventions:
 
 ```python
-from apikeyrotator import ErrorClassifier, ErrorType
-import requests
+from apikeyrotator import APIKeyRotator, ErrorClassifier, ErrorType
 
-class CustomErrorClassifier(ErrorClassifier):
-    """Custom error classifier with domain-specific logic."""
-    
-    def classify_error(
-        self,
-        response=None,
-        exception=None
-    ) -> ErrorType:
-        # Handle custom API error responses
-        if response:
-            # Custom rate limit code
-            if response.status_code == 420:
+class MyApiClassifier(ErrorClassifier):
+    def classify_error(self, response=None, exception=None) -> ErrorType:
+        # NOTE: use "is not None" - error responses of requests are falsy
+        if response is not None:
+            if response.status_code == 420:          # custom "enhance your calm"
                 return ErrorType.RATE_LIMIT
-            
-            # Check response body
-            try:
-                data = response.json()
-                error_code = data.get('error', {}).get('code')
-                
-                if error_code == 'quota_exceeded':
+            if response.status_code == 200:
+                try:
+                    code = response.json().get("error", {}).get("code")
+                except (ValueError, AttributeError):
+                    code = None
+                if code == "quota_exceeded":
                     return ErrorType.RATE_LIMIT
-                elif error_code == 'invalid_key':
-                    return ErrorType.PERMANENT
-                elif error_code == 'temporary_failure':
+                if code == "temporary_failure":
                     return ErrorType.TEMPORARY
-            except:
-                pass
-        
-        # Fall back to default classification
         return super().classify_error(response, exception)
 
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    error_classifier=CustomErrorClassifier()
-)
+    def should_remove_key(self, response=None, exception=None) -> bool:
+        # Also drop keys on 402 Payment Required
+        return response is not None and response.status_code in (401, 402, 403)
+
+rotator = APIKeyRotator(api_keys=["key1", "key2"], error_classifier=MyApiClassifier())
 ```
 
-### Custom Retryable Codes
+- `RATE_LIMIT` parks the key and switches keys, `TEMPORARY` retries with backoff.
+- `PERMANENT` removes the key if `should_remove_key()` is true, otherwise returns the response.
+- Async rotators pass a lightweight object with only `status_code` and `headers`
+  (no body), so body-based rules apply to the sync rotator only.
 
-Add custom HTTP status codes that should be retried:
-
-```python
-classifier = ErrorClassifier(
-    custom_retryable_codes=[420, 509]  # Custom codes to retry
-)
-
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    error_classifier=classifier
-)
-```
-
----
-
-## Session Management
-
-### Custom Session Configuration
-
-Configure connection pooling and timeout:
+Extra retryable statuses without subclassing:
 
 ```python
-from apikeyrotator import APIKeyRotator
+from apikeyrotator import APIKeyRotator, ErrorClassifier
 
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    timeout=30.0  # 30 seconds timeout
-)
-
-# Connection pooling is automatically configured:
-# - 100 connections per pool
-# - Efficient connection reuse
-```
-
-### Session Cleanup
-
-Always clean up sessions:
-
-```python
-# Synchronous
-rotator = APIKeyRotator(api_keys=["key1"])
-try:
-    response = rotator.get(url)
-finally:
-    rotator.session.close()
-
-# Asynchronous (preferred)
-async with AsyncAPIKeyRotator(api_keys=["key1"]) as rotator:
-    response = await rotator.get(url)
-    # Automatically closed
+rotator = APIKeyRotator(api_keys=["key1"], error_classifier=ErrorClassifier(custom_retryable_codes=[420, 509]))
 ```
 
 ---
 
-## Configuration Management
+## Connections and Cleanup
 
-### Custom Config File Location
-
-Store configuration in a custom location:
+Each rotator keeps a connection pool (`pool_size=100` by default). Close it when done:
 
 ```python
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    config_file="/path/to/custom/config.json"
-)
+from apikeyrotator import APIKeyRotator, AsyncAPIKeyRotator
+
+# Sync
+with APIKeyRotator(api_keys=["key1"]) as rotator:
+    response = rotator.get("https://api.example.com/data")
+
+# Async
+async def main():
+    async with AsyncAPIKeyRotator(api_keys=["key1"], pool_size=200) as rotator:
+        response = await rotator.get("https://api.example.com/data")
 ```
 
-### Disable Config Persistence
+`close()` also stops the background key refresh. Reuse one rotator for the whole
+application instead of creating one per request.
 
-Disable automatic config saving:
+Client-level options go to `http_client_kwargs`, e.g. a custom CA bundle with the
+requests backend:
 
 ```python
-from apikeyrotator import ConfigLoader
-
-class NoOpConfigLoader(ConfigLoader):
-    """Config loader that doesn't save anything."""
-    
-    def save_config(self, config=None):
-        pass  # Do nothing
-    
-    def load_config(self):
-        return {}
-
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    config_loader=NoOpConfigLoader(config_file="", logger=None)
-)
+rotator = APIKeyRotator(api_keys=["key1"], http_client_kwargs={"verify": "/etc/ssl/company-ca.pem"})
 ```
 
-### Sensitive Headers
+---
 
-Control whether sensitive headers are saved:
+## Configuration File
+
+The rotator reads `config_file` (default `rotator_config.json`, JSON or YAML) at
+start-up; it never writes it. The only setting it uses is `successful_headers` -
+extra headers per domain - and only when `save_sensitive_headers=True`:
+
+```json
+{
+  "successful_headers": {
+    "api.example.com": {"Accept": "application/json", "X-Client": "my-app"}
+  }
+}
+```
 
 ```python
-# Don't save sensitive headers (default, more secure)
 rotator = APIKeyRotator(
     api_keys=["key1"],
-    save_sensitive_headers=False
-)
-
-# Save sensitive headers (less secure, but remembers auth)
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    save_sensitive_headers=True
+    config_file="/etc/myapp/rotator.json",
+    save_sensitive_headers=True,   # apply successful_headers for matching domains
 )
 ```
 
-When `save_sensitive_headers=False`, the following headers are excluded from saved configuration:
-- `Authorization`
-- `X-API-Key`
-- `Cookie`
+`Authorization` and `X-API-Key` entries in the file are always ignored - the key
+comes from the rotator. `ConfigLoader` can be used directly to read/write such files.
 
 ---
 
-## Performance Optimization
+## Performance
 
-### For High-Volume Requests
-
-Use async for I/O-bound operations:
+- Per-request overhead is ~10 µs of CPU; key selection ~1 µs even with 1000 keys;
+  ~230 bytes of memory per key (see [benchmarks](../benchmarks/README.md)).
+- Use the async rotator (or threads with the sync one) for many concurrent requests,
+  and limit concurrency yourself:
 
 ```python
 import asyncio
 from apikeyrotator import AsyncAPIKeyRotator
 
-async def process_many_urls(urls):
-    async with AsyncAPIKeyRotator(
-        api_keys=["key1", "key2", "key3"],
-        timeout=5.0  # Lower timeout for faster failures
-    ) as rotator:
-        # Process in large batches
-        tasks = [rotator.get(url) for url in urls[:1000]]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        return responses
-
-# Process 1000 URLs concurrently
-urls = [f"https://api.example.com/item/{i}" for i in range(1000)]
-results = asyncio.run(process_many_urls(urls))
-```
-
-### For Low-Latency Requirements
-
-Minimize overhead:
-
-```python
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    max_retries=2,           # Fewer retries
-    base_delay=0.5,          # Shorter delays
-    random_delay_range=None, # No random delays
-    user_agents=None,        # No UA rotation
-    enable_metrics=False     # Disable metrics collection
-)
-```
-
-### Connection Pooling
-
-Connection pooling is automatically configured for optimal performance:
-
-```python
-# Default configuration (already optimized):
-# - Pool size: 100 connections
-# - Reuses connections efficiently
-# - Minimal connection overhead
-
-rotator = APIKeyRotator(api_keys=["key1", "key2"])
-# No additional configuration needed
-```
-
-### Concurrent Async Requests with Semaphore
-
-Control concurrency to prevent overwhelming the API:
-
-```python
-import asyncio
-from asyncio import Semaphore
-from apikeyrotator import AsyncAPIKeyRotator
-
-async def fetch_with_limit(urls, max_concurrent=50):
-    """Fetch URLs with concurrency limit."""
-    
-    semaphore = Semaphore(max_concurrent)
-    
-    async with AsyncAPIKeyRotator(api_keys=["key1", "key2"]) as rotator:
+async def fetch_all(urls, max_concurrent=50):
+    semaphore = asyncio.Semaphore(max_concurrent)
+    async with AsyncAPIKeyRotator(api_keys=["key1", "key2"], total_timeout=30) as rotator:
         async def fetch_one(url):
             async with semaphore:
-                return await rotator.get(url)
-        
-        tasks = [fetch_one(url) for url in urls]
-        return await asyncio.gather(*tasks)
+                response = await rotator.get(url)
+                return await response.json()
+        return await asyncio.gather(*(fetch_one(u) for u in urls), return_exceptions=True)
 
-# Fetch 1000 URLs with max 50 concurrent requests
-urls = [f"https://api.example.com/item/{i}" for i in range(1000)]
-results = asyncio.run(fetch_with_limit(urls, max_concurrent=50))
+results = asyncio.run(fetch_all([f"https://api.example.com/item/{i}" for i in range(1000)]))
 ```
+
+- For the lowest latency: `max_retries=2`, a small `base_delay`, no
+  `random_delay_range`, and `enable_metrics=False` if you don't read metrics.
+- HTTP/2 multiplexing: `AsyncAPIKeyRotator(..., http_backend="httpx", http2=True)`.
 
 ---
 
 ## Best Practices
 
-### 1. Key Management
-
-```python
-# ✅ Good: Load from environment
-rotator = APIKeyRotator()  # Uses .env file
-
-# ✅ Good: Use secret provider
-from apikeyrotator.providers import AWSSecretsManagerProvider
-provider = AWSSecretsManagerProvider(secret_name="my-keys")
-rotator = APIKeyRotator(secret_provider=provider)
-
-# ❌ Bad: Hardcode keys
-rotator = APIKeyRotator(api_keys=["hardcoded_key_123"])
-```
-
-### 2. Error Handling
-
-```python
-# ✅ Good: Specific exception handling
-from apikeyrotator import AllKeysExhaustedError
-
-try:
-    response = rotator.get(url)
-except AllKeysExhaustedError:
-    # Handle this specific case
-    log_failure_and_alert()
-except Exception as e:
-    # Handle other errors
-    log_error(e)
-
-# ❌ Bad: Catch-all without distinction
-try:
-    response = rotator.get(url)
-except:
-    pass
-```
-
-### 3. Resource Cleanup
-
-```python
-# ✅ Good: Use context manager for async
-async with AsyncAPIKeyRotator(api_keys=["key1"]) as rotator:
-    response = await rotator.get(url)
-
-# ✅ Good: Explicit cleanup for sync
-rotator = APIKeyRotator(api_keys=["key1"])
-try:
-    response = rotator.get(url)
-finally:
-    rotator.session.close()
-```
-
-### 4. Rate Limit Configuration
-
-```python
-# ✅ Good: Conservative settings for strict APIs
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2", "key3"],
-    max_retries=5,
-    base_delay=2.0,
-    random_delay_range=(1.0, 3.0)
-)
-
-# ⚠️ Use with caution: Aggressive settings
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    max_retries=1,
-    base_delay=0.1,
-    random_delay_range=None
-)
-```
-
-### 5. Use Middleware for Cross-Cutting Concerns
-
-```python
-# ✅ Good: Use middleware for caching, logging, etc.
-from apikeyrotator.middleware import CachingMiddleware, LoggingMiddleware
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[
-        CachingMiddleware(ttl=600),
-        LoggingMiddleware(verbose=True)
-    ]
-)
-
-# ❌ Bad: Implement caching/logging manually in application code
-```
+1. **Keep keys out of code** - use `API_KEYS` / `.env` or a secret provider with
+   `auto_refresh_interval`.
+2. **Set a deadline** - `total_timeout` bounds the worst-case latency of a request.
+3. **Catch `AllKeysExhaustedError`** (it includes `DeadlineExceededError` and
+   `CircuitOpenError`) and inspect `last_response` / `last_exception`.
+4. **Use `Idempotency-Key`** for POST requests that are safe to retry.
+5. **Reuse and close rotators** (`with` / `async with`).
+6. **Share state between workers** with `RedisStateBackend` when several processes use the same keys.
+7. **Configure logging** in your application (`logging.basicConfig(...)`); the library prints nothing by itself.
 
 ---
 
 ## Next Steps
 
-- See [Middleware Guide](MIDDLEWARE.md) for detailed middleware documentation
-- Check [Examples](EXAMPLES.md) for real-world use cases
-- Read [API Reference](API_REFERENCE.md) for complete parameter documentation
-- Review [Error Handling](ERROR_HANDLING.md) for comprehensive error management
-- See [FAQ](FAQ.md) for common questions
+- [Resilience & Scaling](RESILIENCE.md)
+- [Middleware Guide](MIDDLEWARE.md)
+- [Examples](EXAMPLES.md)
+- [API Reference](API_REFERENCE.md)
+- [Error Handling](ERROR_HANDLING.md)
+- [FAQ](FAQ.md)

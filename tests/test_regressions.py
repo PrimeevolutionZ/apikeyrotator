@@ -300,6 +300,13 @@ class TestMetricsAndRequests:
         headers = mock_request.call_args[1]['headers']
         assert headers == {'authorization': 'Bearer custom'}
 
+    def test_callback_x_api_key_suppresses_default_auth_header(self):
+        rotator = make_rotator(['k1'], header_callback=lambda key, h: {'X-API-Key': key})
+        with patch('requests.Session.request') as mock_request:
+            mock_request.return_value = resp(200)
+            rotator.get('http://example.com')
+        assert mock_request.call_args[1]['headers'] == {'X-API-Key': 'k1'}
+
     def test_user_cookies_are_kept(self):
         rotator = make_rotator(['k1'])
         with patch('requests.Session.request') as mock_request:

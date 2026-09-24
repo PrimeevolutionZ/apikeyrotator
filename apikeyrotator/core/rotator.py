@@ -850,10 +850,11 @@ class BaseKeyRotator:
                 headers.update(result)
 
         present = {h.lower() for h in headers} if headers else ()
-        if "authorization" not in present:
+        # Add the inferred auth header only if the request/callback set no auth header
+        # itself - otherwise the key would be sent twice (e.g. X-API-Key + Authorization).
+        if "authorization" not in present and "x-api-key" not in present:
             header_name, header_value = self._infer_auth_header(key)
-            if header_name.lower() not in present:
-                headers[header_name] = header_value
+            headers[header_name] = header_value
 
         if self.user_agents and "user-agent" not in present:
             user_agent = self.get_next_user_agent()

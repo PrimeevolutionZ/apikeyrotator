@@ -5,14 +5,14 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://pypi.org/project/apikeyrotator/)
 
 [![Downloads](https://pepy.tech/badge/apikeyrotator)](https://pepy.tech/project/apikeyrotator)
-[![Tests](https://github.com/PrimeevolutionZ/apikeyrotator/actions/workflows/python-app.yml/badge.svg)](https://github.com/PrimeevolutionZ/apikeyrotator/actions)
+[![Tests](https://github.com/PrimeevolutionZ/apikeyrotator/actions/workflows/ci.yml/badge.svg)](https://github.com/PrimeevolutionZ/apikeyrotator/actions/workflows/ci.yml)
 [![Stars](https://img.shields.io/github/stars/PrimeevolutionZ/apikeyrotator?style=social)](https://github.com/PrimeevolutionZ/apikeyrotator)
 
 
-[🚀 Quick Start](#-quick-start) • [📚 Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/INDEX.md) • [💡 Examples](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/EXAMPLES.md) • [🔒 Security](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/SECURITY.md) • [📝 Changelog](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/CHANGELOG.md)
+[🚀 Quick Start](#-quick-start) • [📚 Documentation](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/INDEX.md) • [💡 Examples](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/EXAMPLES.md) • [🔒 Security](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/SECURITY.md) • [📝 Changelog](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/CHANGELOG.md)
 
 ---
 
@@ -58,10 +58,10 @@
 </td>
 <td>
 
-🧠 **Intelligent Headers**
-- Auto-detects auth patterns
-- Learns successful configs
-- Persistent configuration
+🧠 **Smart Headers**
+- Auto-detects auth header format
+- Custom header callbacks
+- Per-domain headers from config
 
 </td>
 <td>
@@ -126,9 +126,11 @@ response = rotator.get("https://api.example.com/data")
 print(response.json())
 
 # The rotator automatically:
-# ✅ Rotates keys on rate limits
-# ✅ Retries on failures
-# ✅ Manages headers intelligently
+# ✅ Rotates keys on rate limits (429)
+# ✅ Retries temporary failures with backoff
+# ✅ Drops keys rejected with 401/403
+# ✅ Adds the Authorization header
+```
 
 ### 🛣️ Multi-Provider Fallback Routing
 
@@ -146,7 +148,6 @@ router = FallbackRouter(routes=[
 
 # Automatically falls back to the second API if the first is exhausted!
 response = router.get("https://api.primary.com/data")
-```
 ```
 
 ### 🌟 Using Environment Variables
@@ -177,7 +178,7 @@ rotator = APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
     
     # Retry & Timeout
-    max_retries=5,              # Retry up to 5 times per key
+    max_retries=5,              # Up to 5 attempts per request (across keys)
     base_delay=1.0,             # Start with 1s delay
     timeout=15.0,               # 15s request timeout
     
@@ -240,8 +241,8 @@ asyncio.run(main())
 │  ✓ Automatic rate limit handling                              │
 │  ✓ Smart retry logic with exponential backoff                 │
 │  ✓ Anti-bot evasion (User-Agents, delays, proxies)            │
-│  ✓ Both sync and async support                                │
-│  ✓ Intelligent header detection and persistence               │
+│  ✓ Sync & async, requests / aiohttp / httpx (HTTP/2)          │
+│  ✓ Circuit breaker, deadlines, client-side rate limits        │
 │  ✓ Clean, modern Python with full type hints                  │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -352,6 +353,9 @@ class APIClient:
             # Fallback to cache or alternative source
             return self._get_cached_user(user_id)
 
+    def _get_cached_user(self, user_id: int) -> Dict:
+        return {"id": user_id, "cached": True}
+
 client = APIClient(api_keys=["key1", "key2", "key3"])
 user = client.get_user(123)
 ```
@@ -364,7 +368,7 @@ user = client.get_user(123)
 |----------------------|-----------------------|--------------|---------------------------------------|
 | `api_keys`           | `List[str]` or `str`  | `None`       | API keys to rotate                    |
 | `env_var`            | `str`                 | `"API_KEYS"` | Environment variable name             |
-| `max_retries`        | `int`                 | `3`          | Max retry attempts per key            |
+| `max_retries`        | `int`                 | `3`          | Max attempts per request              |
 | `base_delay`         | `float`               | `1.0`        | Base delay for exponential backoff    |
 | `timeout`            | `float`               | `10.0`       | Request timeout in seconds            |
 | `user_agents`        | `List[str]`           | `None`       | User-Agent strings to rotate          |
@@ -397,8 +401,8 @@ try:
 except NoAPIKeysError:
     print("❌ No API keys provided or found")
     
-except AllKeysExhaustedError:
-    print("❌ All keys failed after maximum retries")
+except AllKeysExhaustedError as e:
+    print("❌ All attempts failed:", e.last_response or e.last_exception)
     # Implement fallback strategy
     
 except Exception as e:
@@ -407,10 +411,11 @@ except Exception as e:
 
 **Error Classification System:**
 
-- **RATE_LIMIT** (429): Switches to next key immediately
-- **TEMPORARY** (5xx): Retries with exponential backoff
-- **PERMANENT** (401, 403): Removes invalid key from pool
-- **NETWORK**: Connection errors, retries or switches key
+- **RATE_LIMIT** (429): parks the key (`Retry-After`) and switches to the next key immediately
+- **TEMPORARY** (5xx): retries with exponential backoff
+- **PERMANENT**: 401/403 remove the key from the pool; other 4xx (e.g. 404) are returned to you without retries
+- **NETWORK**: connection errors and timeouts are retried with backoff
+- `POST`/`PATCH` are not retried after errors where the request may already have been processed (500/502/504, read timeouts) - see [Resilience](docs/RESILIENCE.md)
 
 **[📖 Learn More About Error Handling →](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ERROR_HANDLING.md)**
 
@@ -428,7 +433,7 @@ def custom_retry(response):
         return True
     try:
         return 'error' in response.json()
-    except:
+    except ValueError:  # not JSON
         return False
 
 rotator = APIKeyRotator(
@@ -473,6 +478,8 @@ rotator = APIKeyRotator(
 | [💡 Examples](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/EXAMPLES.md)               | Real-world code examples       |
 | [🔧 Advanced Usage](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ADVANCED_USAGE.md)   | Power features & customization |
 | [🚨 Error Handling](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/ERROR_HANDLING.md)   | Comprehensive error management |
+| [🧯 Resilience & Scaling](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/RESILIENCE.md) | Deadlines, circuit breaker, rate limits, Redis, httpx |
+| [📊 Benchmarks](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/benchmarks/README.md)         | Performance measurements       |
 | [❓ FAQ](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/FAQ.md)                          | Frequently asked questions     |
 | [🔒 Security](https://github.com/PrimeevolutionZ/apikeyrotator/blob/master/SECURITY.md)                    | Security best practices        |
 
@@ -481,17 +488,21 @@ rotator = APIKeyRotator(
 ## 🧪 Testing
 
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio requests-mock aioresponses
+# Install the package with test dependencies
+pip install -e ".[test]"
 
-# Run all tests
+# Run all tests (~2 s)
 pytest
 
 # Run with coverage
 pytest --cov=apikeyrotator --cov-report=html
 
 # Run specific test file
-pytest tests/test_rotator.py -v
+pytest tests/test_features.py -v
+
+# Lint and benchmark
+ruff check .
+python benchmarks/bench_core.py --quick
 ```
 
 ## 🤝 Contributing
@@ -537,7 +548,7 @@ Security is a top priority. Please review our [Security Policy](https://github.c
 - 📜 Security features
 - ✅ Security audit checklist
 
-**Found a security issue?** Please report it privately via the internal issue tracker.
+**Found a security issue?** Please report it privately via [GitHub Security Advisories](https://github.com/PrimeevolutionZ/apikeyrotator/security/advisories/new) - not in a public issue.
 
 ## 📜 License
 

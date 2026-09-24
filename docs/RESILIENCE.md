@@ -100,7 +100,7 @@ print(rotator.get_circuit_states())   # {'api.example.com': 'OPEN'}
   next provider immediately.
 
 Benchmark (`resilience_host_down*`): with the host answering 503 to everything, the breaker
-cuts upstream calls from **3 per request to 0.05** and waiting from **3147 s to 64 s per
+cuts upstream calls from **3 per request to 0.02** and waiting from **3155 s to 21 s per
 1000 requests**.
 
 ## Client-side rate limits
@@ -121,8 +121,8 @@ If you know each key's quota, enforce it before the server does:
 rotator = APIKeyRotator(api_keys=keys, key_rate_limit=(60, 60))
 ```
 
-Benchmark (`resilience_quota_*`, 10 keys x 10 req/min): reacting only to 429 costs 1.09
-upstream calls per request; header hints or the token bucket bring it to **1.00 - no 429s**.
+Benchmark (`resilience_quota_*`, 10 keys x 10 req/min): reacting only to 429 costs 1.10
+upstream calls per request; header hints bring it to **1.01**, the token bucket to **1.00 - no 429s at all**.
 
 ## Shared state between processes (Redis)
 

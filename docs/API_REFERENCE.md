@@ -1,574 +1,450 @@
 # API Reference
 
-Complete reference documentation for all APIKeyRotator classes and methods.
+Complete reference for the public API of **apikeyrotator 0.8** (Python 3.12+).
+Everything listed here is importable from the top-level package unless another
+module is shown:
+
+```python
+from apikeyrotator import APIKeyRotator, AsyncAPIKeyRotator, FallbackRouter, RedisStateBackend
+```
 
 ## Table of Contents
 
-- [Core Classes](#core-classes)
+- [Rotators](#rotators)
+  - [Constructor parameters](#constructor-parameters)
+  - [Retry behaviour](#retry-behaviour)
   - [APIKeyRotator](#apikeyrotator)
   - [AsyncAPIKeyRotator](#asyncapikeyrotator)
-- [Error Classification](#error-classification)
+- [Exceptions](#exceptions)
+- [Multi-Provider Routing](#multi-provider-routing)
 - [Rotation Strategies](#rotation-strategies)
-- [Middleware System](#middleware-system)
+- [Shared State Backends](#shared-state-backends)
+- [Middleware](#middleware)
 - [Metrics & Monitoring](#metrics--monitoring)
 - [Secret Providers](#secret-providers)
-- [Configuration Management](#configuration-management)
-- [Exceptions](#exceptions)
+- [Error Classification](#error-classification)
 - [Utilities](#utilities)
+- [Configuration Loader](#configuration-loader)
+- [Key Parsing](#key-parsing)
 
 ---
 
-## Core Classes
+## Rotators
 
-### APIKeyRotator
+`APIKeyRotator` (sync) and `AsyncAPIKeyRotator` (async) share all constructor
+parameters and behaviour; they differ only in the HTTP client and in which
+methods are coroutines.
 
-Synchronous API key rotator for `requests`-based applications.
+### Constructor parameters
 
-#### Constructor
-
-```python
+```python signature
 APIKeyRotator(
-    api_keys: Optional[Union[List[str], str]] = None,
-    env_var: str = "API_KEYS",
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    timeout: float = 10.0,
-    should_retry_callback: Optional[Callable] = None,
-    header_callback: Optional[Callable] = None,
-    user_agents: Optional[List[str]] = None,
-    random_delay_range: Optional[Tuple[float, float]] = None,
-    proxy_list: Optional[List[str]] = None,
-    logger: Optional[logging.Logger] = None,
-    config_file: str = "rotator_config.json",
-    load_env_file: bool = True,
-    error_classifier: Optional[ErrorClassifier] = None,
-    config_loader: Optional[ConfigLoader] = None,
-    rotation_strategy: Union[str, RotationStrategy, BaseRotationStrategy] = "round_robin",
-    rotation_strategy_kwargs: Optional[Dict] = None,
-    middlewares: Optional[List[RotatorMiddleware]] = None,
-    secret_provider: Optional[SecretProvider] = None,
-    enable_metrics: bool = True,
-    save_sensitive_headers: bool = False
+    api_keys=None, env_var="API_KEYS", max_retries=3, base_delay=1.0, timeout=10.0,
+    should_retry_callback=None, header_callback=None, user_agents=None,
+    random_delay_range=None, proxy_list=None, logger=None,
+    config_file="rotator_config.json", load_env_file=True, error_classifier=None,
+    config_loader=None, rotation_strategy="round_robin", rotation_strategy_kwargs=None,
+    middlewares=None, secret_provider=None, enable_metrics=True,
+    save_sensitive_headers=False, max_delay=60.0, pool_size=100, recovery_timeout=None,
+    total_timeout=None, retry_non_idempotent=False, circuit_breaker=None,
+    key_rate_limit=None, respect_rate_limit_headers=True, state_backend=None,
+    state_sync_interval=1.0, auto_refresh_interval=None,
+    *, http_backend="requests", http2=False, http_client_kwargs=None,
 )
 ```
 
-**Parameters:**
+**Keys & basics**
 
-| Parameter                | Type                                             | Default                 | Description                                                                           |
-|--------------------------|--------------------------------------------------|-------------------------|---------------------------------------------------------------------------------------|
-| `api_keys`               | `Optional[Union[List[str], str]]`                | `None`                  | List of API keys or comma-separated string. If `None`, loaded from environment.       |
-| `env_var`                | `str`                                            | `"API_KEYS"`            | Environment variable name to load keys from.                                          |
-| `max_retries`            | `int`                                            | `3`                     | Maximum retry attempts per key before moving to next key.                             |
-| `base_delay`             | `float`                                          | `1.0`                   | Base delay in seconds for exponential backoff: `base_delay * (2 ** attempt)`.         |
-| `timeout`                | `float`                                          | `10.0`                  | Request timeout in seconds.                                                           |
-| `should_retry_callback`  | `Optional[Callable]`                             | `None`                  | Custom function `(response) -> bool` to determine retry logic.                        |
-| `header_callback`        | `Optional[Callable]`                             | `None`                  | Custom function `(key, headers) -> (headers, cookies)` for dynamic header generation. |
-| `user_agents`            | `Optional[List[str]]`                            | `None`                  | List of User-Agent strings to rotate through.                                         |
-| `random_delay_range`     | `Optional[Tuple[float, float]]`                  | `None`                  | Tuple of `(min, max)` for random delay before each request.                           |
-| `proxy_list`             | `Optional[List[str]]`                            | `None`                  | List of proxy URLs to rotate through.                                                 |
-| `logger`                 | `Optional[logging.Logger]`                       | `None`                  | Custom logger instance. Creates default if not provided.                              |
-| `config_file`            | `str`                                            | `"rotator_config.json"` | Path to configuration file for storing learned settings.                              |
-| `load_env_file`          | `bool`                                           | `True`                  | Whether to automatically load `.env` file (requires `python-dotenv`).                 |
-| `error_classifier`       | `Optional[ErrorClassifier]`                      | `None`                  | Custom error classifier instance.                                                     |
-| `config_loader`          | `Optional[ConfigLoader]`                         | `None`                  | Custom configuration loader instance.                                                 |
-| `rotation_strategy`      | `Union[str, RotationStrategy, BaseRotationStrategy]` | `"round_robin"`     | Key rotation strategy ('round_robin', 'random', 'weighted', 'lru', 'health_based').  |
-| `rotation_strategy_kwargs` | `Optional[Dict]`                               | `None`                  | Additional kwargs for rotation strategy initialization.                               |
-| `middlewares`            | `Optional[List[RotatorMiddleware]]`              | `None`                  | List of middleware instances for request/response interception.                       |
-| `secret_provider`        | `Optional[SecretProvider]`                       | `None`                  | Secret provider for loading keys from external sources.                               |
-| `enable_metrics`         | `bool`                                           | `True`                  | Enable built-in metrics collection.                                                   |
-| `save_sensitive_headers` | `bool`                                           | `False`                 | Whether to save sensitive headers (Authorization, X-API-Key) to config.               |
-| `max_delay`              | `float`                                          | `60.0`                  | Upper bound for any single backoff / rate-limit wait (seconds).                       |
-| `pool_size`              | `int`                                            | `100`                   | Size of the HTTP connection pool (requests adapter / aiohttp connector limit).        |
-| `recovery_timeout`       | `Optional[float]`                                | `None` (strategy: 60s)  | Seconds after the last failure when an unhealthy key is probed again.                 |
-| `total_timeout`          | `float \| None`                                  | `None`                  | Time budget of one request incl. retries/waits (overridable per request). Raises `DeadlineExceededError`. |
-| `retry_non_idempotent`   | `bool`                                           | `False`                 | Retry POST/PATCH after errors where the request may have been processed.              |
-| `circuit_breaker`        | `bool \| CircuitBreakerConfig \| None`           | `None`                  | Per-host circuit breaker; raises `CircuitOpenError` while open.                       |
-| `key_rate_limit`         | `tuple[int, float] \| None`                      | `None`                  | Client-side token bucket per key: `(requests, per_seconds)`.                          |
-| `respect_rate_limit_headers` | `bool`                                       | `True`                  | Park a key reporting `X-RateLimit-Remaining: 0` until its reset.                      |
-| `state_backend`          | `StateBackend \| None`                           | `None`                  | Shared state (`RedisStateBackend`, `InMemoryStateBackend`).                           |
-| `state_sync_interval`    | `float`                                          | `1.0`                   | How often shared state is pulled (seconds).                                           |
-| `auto_refresh_interval`  | `float \| None`                                  | `None`                  | Reload keys from `secret_provider` every N seconds in the background.                 |
-| `http_backend`           | `str`                                            | `"requests"` / `"aiohttp"` | `"httpx"` for either rotator (keyword-only).                                       |
-| `http2`                  | `bool`                                           | `False`                 | HTTP/2 (httpx backend only).                                                          |
-| `http_client_kwargs`     | `dict \| None`                                   | `None`                  | Extra HTTP client settings (e.g. `verify`, `cert`, custom transport).                 |
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `api_keys` | `list[str] \| str \| None` | `None` | Keys as a list or a comma-separated string. If `None`, keys come from `secret_provider`, else from the `env_var` environment variable. Duplicates and blanks are removed. |
+| `env_var` | `str` | `"API_KEYS"` | Environment variable with comma-separated keys. |
+| `load_env_file` | `bool` | `True` | Load a `.env` file first (if `python-dotenv` is installed). |
+| `secret_provider` | `SecretProvider \| None` | `None` | Source of keys (env, file, AWS, GCP...). See [Secret Providers](#secret-providers). |
+| `auto_refresh_interval` | `float \| None` | `None` | Reload keys from `secret_provider` every N seconds in the background. Requires `secret_provider`. |
+| `rotation_strategy` | `str \| RotationStrategy \| BaseRotationStrategy` | `"round_robin"` | `"round_robin"`, `"random"`, `"weighted"`, `"lru"`, `"health_based"`, `"failover"`, or a strategy instance. |
+| `rotation_strategy_kwargs` | `dict \| None` | `None` | Extra strategy arguments. For `"weighted"`: `{"weights": {"key1": 3, "key2": 1}}` (missing keys get `1.0`). For `"health_based"`: `failure_threshold`, `health_check_interval`. |
+| `recovery_timeout` | `float \| None` | `None` (strategy default `60`) | Seconds after its last failure when an unhealthy key gets a probe request again. |
 
-See [Resilience & Scaling](RESILIENCE.md) for details and examples.
+**Retries & timeouts**
 
-**Retry behaviour (0.7.0):**
-- `429` — the key is marked rate-limited until `Retry-After` expires and the next available key is used **immediately**; the rotator waits only when every key is rate-limited (until the earliest one frees up, capped by `max_delay`).
-- `5xx` / network errors — exponential backoff (`Retry-After` is honoured for `5xx`), capped by `max_delay`.
-- `401` / `403` — the key is removed and the request is retried with another key.
-- Other `4xx` (`400`, `404`, `422`, ...) — the response is returned to the caller; no retry, the key is kept.
-- `POST` / `PATCH` (0.8.0) — not retried after `500`/`502`/`504` or read timeouts unless `retry_non_idempotent=True` or an `Idempotency-Key` header is sent.
-- When all attempts fail `AllKeysExhaustedError` is raised; it carries `last_response` / `last_exception`.
-- `weighted` strategy by name: pass weights via `rotation_strategy_kwargs={"weights": {"key1": 3, "key2": 1}}` (missing keys default to `1.0`).
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `max_retries` | `int` | `3` | Maximum attempts per request (>= 1). Switching away from a key rejected with 401/403 does not consume an attempt. |
+| `base_delay` | `float` | `1.0` | Exponential backoff base: `base_delay * 2 ** attempt` (+ up to 10% jitter). |
+| `max_delay` | `float` | `60.0` | Upper bound for any single backoff or rate-limit wait. |
+| `timeout` | `float` | `10.0` | Timeout of one attempt, seconds. Overridable per request (`timeout=`). |
+| `total_timeout` | `float \| None` | `None` | Time budget of the whole request (all attempts and waits). Overridable per request (`total_timeout=`). Raises `DeadlineExceededError`. |
+| `retry_non_idempotent` | `bool` | `False` | Also retry `POST`/`PATCH` after errors where the request may already have been processed. See [Retry behaviour](#retry-behaviour). |
+| `should_retry_callback` | `Callable \| None` | `None` | `callback(response) -> bool` (sync) / `callback(status: int) -> bool` (async). Return `True` to retry an otherwise successful response. |
+| `error_classifier` | `ErrorClassifier \| None` | `None` | Custom classification of statuses/exceptions. |
 
-**Raises:**
-- `NoAPIKeysError`: If no API keys are provided or found in environment.
+**Resilience & rate limits**
 
-#### Methods
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `circuit_breaker` | `bool \| CircuitBreakerConfig \| None` | `None` | Per-host circuit breaker. `True` = `CircuitBreakerConfig()` defaults. |
+| `key_rate_limit` | `tuple[int, float] \| None` | `None` | Client-side token bucket per key: `(requests, per_seconds)`, e.g. `(60, 60)`. |
+| `respect_rate_limit_headers` | `bool` | `True` | Park a key whose response says `X-RateLimit-Remaining: 0` until `X-RateLimit-Reset`. |
+| `state_backend` | `StateBackend \| None` | `None` | Share rate limits, rejected keys and token buckets between rotators/processes (e.g. `RedisStateBackend`). |
+| `state_sync_interval` | `float` | `1.0` | How often (seconds) shared state is pulled from `state_backend`. |
 
-##### get()
+**Requests, headers & HTTP client**
 
-```python
-def get(self, url: str, **kwargs) -> requests.Response
-```
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `header_callback` | `Callable \| None` | `None` | `callback(key, headers) -> dict` or `-> (headers, cookies)`; its headers are merged into every request. |
+| `user_agents` | `list[str] \| None` | `None` | User-Agent strings rotated per request (only if the request sets none). |
+| `random_delay_range` | `tuple[float, float] \| None` | `None` | Random pause `(min, max)` seconds before each attempt. |
+| `proxy_list` | `list[str] \| None` | `None` | Proxy URLs rotated per attempt. |
+| `pool_size` | `int` | `100` | Connection pool size. |
+| `middlewares` | `list[RotatorMiddleware] \| None` | `None` | Request/response hooks. See [Middleware](#middleware). |
+| `enable_metrics` | `bool` | `True` | Collect `RotatorMetrics` (`get_metrics()`). |
+| `logger` | `logging.Logger \| None` | `None` | Logger to use (default: `logging.getLogger("apikeyrotator.core.rotator")`, no handler attached). |
+| `config_file` / `config_loader` | `str` / `ConfigLoader \| None` | `"rotator_config.json"` / `None` | Persistent config (used with `save_sensitive_headers`). |
+| `save_sensitive_headers` | `bool` | `False` | Apply headers saved in the config (`successful_headers`, auth headers excluded) to requests for the same domain. |
+| `http_backend` *(keyword-only)* | `str` | `"requests"` (sync) / `"aiohttp"` (async) | `"httpx"` for either rotator (`pip install apikeyrotator[httpx]`). |
+| `http2` *(keyword-only)* | `bool` | `False` | HTTP/2 - httpx backend only. |
+| `http_client_kwargs` *(keyword-only)* | `dict \| None` | `None` | Client-level settings: for requests they are set on the `Session` (e.g. `verify`, `cert`); for aiohttp/httpx they are passed to the `ClientSession` / `httpx.Client` constructor (e.g. httpx `transport=`, `verify=`; aiohttp `connector_owner=`, `trust_env=`). |
 
-Perform a GET request with automatic key rotation and retry logic.
+**Raises** at construction: `NoAPIKeysError` (no keys found), `ValueError` (invalid
+parameters, e.g. `max_retries < 1`, `auto_refresh_interval` without `secret_provider`).
 
-**Parameters:**
-- `url` (str): Target URL.
-- `**kwargs`: Additional arguments passed to `requests.Session.request()`.
+**Authorization header.** If neither the request nor `header_callback` sets an
+`Authorization` or `X-API-Key` header, one is added: `Bearer <key>` for keys starting with `sk-`/`pk-`, `X-API-Key: <key>` for
+32-character keys, otherwise `Authorization: Key <key>`. Use `header_callback`
+for any other scheme.
 
-**Returns:**
-- `requests.Response`: Response object from successful request.
+### Retry behaviour
 
-**Raises:**
-- `AllKeysExhaustedError`: If all keys fail after maximum retries.
+| Outcome | What the rotator does |
+|---|---|
+| `2xx` / `3xx` | Returns the response. If it reports `X-RateLimit-Remaining: 0`, the key is parked until the reset. |
+| `429` | Parks the key (until `Retry-After` / `X-RateLimit-Reset`, else a backoff interval) and retries **immediately** with another key; waits only if every key is parked (until the earliest frees up, capped by `max_delay`). |
+| `401`, `403` | Removes the key from rotation (and from shared state) and retries with another key. |
+| other `4xx` (`400`, `404`, `422`...) | Returns the response - no retry, the key is kept. |
+| `5xx` | Retries with backoff (`Retry-After` honoured). |
+| Network error | Retries with backoff. |
+| `POST`/`PATCH` + `500`/`502`/`504`, read timeout, dropped connection | **Not retried**: the response is returned / the exception re-raised (the operation may have been executed). Retried if `retry_non_idempotent=True` or an `Idempotency-Key` header is sent. `429`, `503`, `408`, `425` and connection failures are always retried. |
+| All attempts used | Raises `AllKeysExhaustedError` (`last_response` / `last_exception` attached). |
+| `total_timeout` spent | Raises `DeadlineExceededError`. |
+| Circuit open for the host | Raises `CircuitOpenError` without a network call. |
 
-**Example:**
-```python
-response = rotator.get("https://api.example.com/data")
-print(response.json())
-```
+### APIKeyRotator
 
-##### post(), put(), delete(), patch()
-
-Similar to `get()`, but for different HTTP methods.
-
-##### get_key_statistics()
+Synchronous rotator (default HTTP client: `requests`).
 
 ```python
-def get_key_statistics(self) -> Dict[str, Dict]
+from apikeyrotator import APIKeyRotator
+
+with APIKeyRotator(api_keys=["key1", "key2"], total_timeout=30) as rotator:
+    response = rotator.get("https://api.example.com/data", params={"q": "x"})
+    print(response.json())
 ```
 
-Get detailed statistics for all keys.
-
-**Returns:**
-- Dictionary mapping keys to their metrics (total_requests, success_rate, etc.)
-
-##### get_metrics()
-
-```python
-def get_metrics(self) -> Optional[Dict]
-```
-
-Get general rotator metrics (if metrics enabled).
-
-**Returns:**
-- Dictionary with total requests, success rate, uptime, endpoint stats
-
-##### reset_key_health()
-
-```python
-def reset_key_health(self, key: Optional[str] = None)
-```
-
-Reset health status for one or all keys.
-
-##### export_config()
-
-```python
-def export_config(self) -> Dict
-```
-
-Export current rotator configuration.
-
-##### refresh_keys_from_provider()
-
-```python
-async def refresh_keys_from_provider()
-```
-
-Refresh keys from the configured secret provider.
-
----
+| Method / property | Description |
+|---|---|
+| `request(method, url, **kwargs)` | Sends a request with rotation and retries. `kwargs` are passed to the HTTP client (`params`, `json`, `data`, `headers`, `cookies`, `timeout`, `stream`...) plus `total_timeout`. Returns the client's response (`requests.Response` or `httpx.Response`). |
+| `get / post / put / patch / delete / head(url, **kwargs)` | Shortcuts for `request()`. |
+| `close()` | Stops background refresh and closes the connection pool. The rotator is also a context manager (`with ... as rotator`). |
+| `session` *(property)* | Underlying client (`requests.Session` / `httpx.Client`). |
+| `keys` *(property, settable)* | Current key list (copy). Assigning replaces the keys; metrics of kept keys are preserved. |
+| `key_count` *(property)* | Number of keys in rotation. |
+| `get_next_key()` | Key the strategy would use next (advances the strategy). |
+| `get_key_statistics()` | `{key: KeyMetrics.to_dict()}` for every key. |
+| `get_metrics()` | Global metrics (see [RotatorMetrics](#rotatormetrics)); `{}` if metrics are disabled. |
+| `get_circuit_states()` | `{host: "CLOSED" \| "OPEN" \| "HALF_OPEN"}`. |
+| `reset_key_health(key=None)` | Marks one key (or all) healthy again and clears its rate-limit parking. |
+| `export_config()` | Settings plus per-key statistics with masked keys (safe to log). |
+| `refresh_keys_from_provider_sync()` | Reloads keys from `secret_provider` now. Keys rejected with 401/403 are not re-added; an empty result keeps the current keys. |
+| `await refresh_keys_from_provider()` | Async version of the above. |
+| `start_auto_refresh(interval)` / `stop_auto_refresh()` | Start/stop background refresh (daemon thread). |
+| `get_next_user_agent()` / `get_next_proxy()` | Next value of the rotation lists (`None` if not configured). |
 
 ### AsyncAPIKeyRotator
 
-Asynchronous API key rotator for `aiohttp`-based applications.
-
-#### Constructor
-
-Same parameters as `APIKeyRotator`.
-
-#### Context Manager
-
-`AsyncAPIKeyRotator` should be used as an async context manager:
+Asynchronous rotator (default HTTP client: `aiohttp`). Same constructor.
 
 ```python
-async with AsyncAPIKeyRotator(api_keys=["key1"]) as rotator:
+from apikeyrotator import AsyncAPIKeyRotator
+
+async with AsyncAPIKeyRotator(api_keys=["key1", "key2"]) as rotator:
     response = await rotator.get("https://api.example.com/data")
+    data = await response.json()          # aiohttp
 ```
 
-#### Methods
+| Method / property | Description |
+|---|---|
+| `await request(method, url, **kwargs)` | Like the sync version. Returns `aiohttp.ClientResponse` (or `httpx.Response` with `http_backend="httpx"`). With middlewares the body is read before returning (still available via `read()`/`json()`). A cache hit returns a small response object with `status`, `status_code`, `headers`, `read()`, `text()`, `json()`. |
+| `await get / post / put / patch / delete / head(url, **kwargs)` | Shortcuts. |
+| `await close()` | Closes the client session and stops background refresh. Use `async with` or call it explicitly. |
+| `start_auto_refresh(interval)` / `await stop_auto_refresh()` | Background refresh as an asyncio task (needs a running loop; started automatically on first use when `auto_refresh_interval` is set). |
+| `keys`, `key_count`, `get_next_key()`, `get_key_statistics()`, `get_metrics()`, `get_circuit_states()`, `reset_key_health()`, `export_config()`, `refresh_keys_from_provider()`, `refresh_keys_from_provider_sync()` | Same as the sync rotator. |
 
-All methods are coroutines and must be awaited.
-
-##### get(), post(), put(), delete(), etc.
-
-```python
-async def get(self, url: str, **kwargs) -> aiohttp.ClientResponse
-```
-
-Perform async HTTP requests.
+State backends that do network I/O (Redis) are called in a worker thread, so the
+event loop is never blocked.
 
 ---
 
-## Error Classification
+## Exceptions
 
-### ErrorClassifier
-
-Intelligent error classification for determining retry behavior.
-
-#### Constructor
-
-```python
-ErrorClassifier(custom_retryable_codes: Optional[List[int]] = None)
+```
+APIKeyError
+├── NoAPIKeysError
+├── AllKeysExhaustedError          (.last_response, .last_exception)
+│   ├── DeadlineExceededError      (also a TimeoutError)
+│   └── CircuitOpenError           (.host, .retry_after)
+├── AllProvidersExhaustedError
+└── HTTPStatusError                (.status_code)
 ```
 
-**Parameters:**
-- `custom_retryable_codes`: Additional HTTP status codes to treat as retryable
+| Exception | Raised when |
+|---|---|
+| `NoAPIKeysError` | No keys were given or found (`parse_keys`, rotator constructor). |
+| `AllKeysExhaustedError(message, last_response=None, last_exception=None)` | All attempts failed or no keys are left. `last_response` is the last HTTP response (released for async), `last_exception` the last network error. |
+| `DeadlineExceededError` | The request's `total_timeout` was spent. `FallbackRouter` re-raises it instead of trying other providers. |
+| `CircuitOpenError(host, retry_after)` | The circuit breaker for `host` is open; `retry_after` = seconds until a probe is allowed. `FallbackRouter` moves to the next provider. |
+| `AllProvidersExhaustedError` | `FallbackRouter`: every route failed and no `on_all_exhausted` callback is set. |
+| `HTTPStatusError(status_code)` | Passed to middleware `on_error` hooks for error responses; raised by `raise_for_status()` of cached async responses. |
 
-#### Methods
+Network errors of non-idempotent requests that are not retried are re-raised as
+the HTTP client's own exception (`requests.ReadTimeout`, `httpx.ReadTimeout`...).
 
-##### classify_error()
+---
+
+## Multi-Provider Routing
+
+### ProviderRoute
 
 ```python
-def classify_error(
-    self,
-    response: Optional[requests.Response] = None,
-    exception: Optional[Exception] = None
-) -> ErrorType
+ProviderRoute(rotator, name="default", request_transformer=None, condition=None, on_exhausted=None)
 ```
 
-Classify an error based on response or exception.
+| Parameter | Description |
+|---|---|
+| `rotator` | `APIKeyRotator` or `AsyncAPIKeyRotator` of this provider. |
+| `name` | Name used in logs. |
+| `request_transformer` | `f(method, url, kwargs) -> (method, url, kwargs)` adapting the request to this provider (receives a copy of `kwargs`). |
+| `condition` | `f(method, url, kwargs) -> bool`; the route is skipped when it returns `False`. |
+| `on_exhausted` | Callback (sync or async) run when this provider gives up. |
 
-**Error Classification:**
-- **RATE_LIMIT**: HTTP 429 → Switch to next key
-- **TEMPORARY**: 5xx, 408, 409, 425, 503 → Retry with backoff
-- **PERMANENT**: 401, 403, 404, 410, other 4xx → Remove key or fail
-- **NETWORK**: Connection errors, timeouts → Retry or switch key
-- **UNKNOWN**: Unclassified errors
+### FallbackRouter
 
-**Example:**
 ```python
-classifier = ErrorClassifier(custom_retryable_codes=[420])
-error_type = classifier.classify_error(response=response)
-
-if error_type == ErrorType.RATE_LIMIT:
-    # Handle rate limit
-    pass
+FallbackRouter(routes, on_all_exhausted=None, logger=None)
 ```
 
-##### is_retryable()
+Tries routes in order and moves to the next one when a provider raises
+`AllKeysExhaustedError` (including `CircuitOpenError`). `DeadlineExceededError`
+is re-raised immediately. If all routes fail, `on_all_exhausted(method, url, kwargs)`
+is called (its return value is returned) or `AllProvidersExhaustedError` is raised.
+
+| Method | Description |
+|---|---|
+| `request(method, url, **kwargs)`, `get/post/put/delete(url, **kwargs)` | Sync; routes with async rotators are skipped. |
+| `await request_async(method, url, **kwargs)`, `get_async/post_async/put_async/delete_async(...)` | Async; routes with sync rotators are skipped. |
 
 ```python
-def is_retryable(
-    self,
-    response: Optional[requests.Response] = None,
-    exception: Optional[Exception] = None
-) -> bool
-```
+from apikeyrotator import APIKeyRotator, FallbackRouter, ProviderRoute
 
-Determine if request can be retried.
+def to_backup(method, url, kwargs):
+    return method, url.replace("api.primary.com", "api.backup.com"), kwargs
 
-##### should_switch_key()
-
-```python
-def should_switch_key(
-    self,
-    response: Optional[requests.Response] = None,
-    exception: Optional[Exception] = None
-) -> bool
-```
-
-Determine if API key should be switched.
-
-##### get_retry_delay()
-
-```python
-def get_retry_delay(
-    self,
-    response: Optional[requests.Response] = None,
-    default_delay: float = 1.0
-) -> float
-```
-
-Get recommended retry delay based on response headers.
-
-### ErrorType (Enum)
-
-```python
-class ErrorType(Enum):
-    RATE_LIMIT = "rate_limit"
-    TEMPORARY = "temporary"
-    PERMANENT = "permanent"
-    NETWORK = "network"
-    UNKNOWN = "unknown"
+router = FallbackRouter([
+    ProviderRoute(APIKeyRotator(api_keys=["p1", "p2"]), name="primary"),
+    ProviderRoute(APIKeyRotator(api_keys=["b1"]), name="backup", request_transformer=to_backup),
+])
+response = router.get("https://api.primary.com/v1/items")
 ```
 
 ---
 
 ## Rotation Strategies
 
-### Base Strategy Classes
+| Name | Class | Behaviour |
+|---|---|---|
+| `"round_robin"` | `RoundRobinRotationStrategy(keys)` | Cycles through keys in order, skipping unavailable ones. |
+| `"random"` | `RandomRotationStrategy(keys)` | Random available key. |
+| `"weighted"` | `WeightedRotationStrategy({key: weight})` | Random, proportional to weights (non-negative, at least one positive). |
+| `"lru"` | `LRURotationStrategy(keys)` | Least recently used available key (atomic under concurrency). |
+| `"health_based"` | `HealthBasedStrategy(keys, failure_threshold=3, health_check_interval=300)` | Random healthy key; a key with `failure_threshold` consecutive failures is excluded and rechecked after `health_check_interval` seconds. |
+| `"failover"` | `FailoverRotationStrategy(keys)` | Priority order: always the first available key; later keys are backups. |
 
-#### BaseRotationStrategy
+"Available" means not rate-limited and healthy (or unhealthy but past
+`recovery_timeout` since its last failure). If no key is available, strategies
+fall back to all keys.
 
-Abstract base class for all rotation strategies.
+### create_rotation_strategy()
 
-```python
-class BaseRotationStrategy(ABC):
-    def __init__(self, keys: Union[List[str], Dict[str, float]])
-    
-    @abstractmethod
-    def get_next_key(
-        self,
-        current_key_metrics: Optional[Dict[str, KeyMetrics]] = None
-    ) -> str
+```python signature
+create_rotation_strategy(strategy_type: str | RotationStrategy, keys: list[str] | dict[str, float], **kwargs) -> BaseRotationStrategy
 ```
 
-#### KeyMetrics
-
-Per-key metrics tracking.
-
 ```python
-class KeyMetrics:
-    key: str
-    total_requests: int
-    successful_requests: int
-    failed_requests: int
-    avg_response_time: float
-    last_used: float
-    last_success: float
-    last_failure: float
-    consecutive_failures: int
-    rate_limit_hits: int
-    is_healthy: bool
-    success_rate: float
-    rate_limit_reset: float
-    requests_remaining: float
+from apikeyrotator import create_rotation_strategy, RotationStrategy
+
+create_rotation_strategy("weighted", {"key1": 3, "key2": 1})
+create_rotation_strategy(RotationStrategy.HEALTH_BASED, ["k1", "k2"], failure_threshold=5)
 ```
 
-**Methods:**
-- `update_from_request(success, response_time, is_rate_limited, **kwargs)`: Update metrics
-- `get_score() -> float`: Calculate key quality score (0.0-1.0)
-- `to_dict() -> Dict`: Serialize to dictionary
+`RotationStrategy` enum: `ROUND_ROBIN`, `RANDOM`, `WEIGHTED`, `LRU`, `HEALTH_BASED`, `FAILOVER`.
 
-### Strategy Implementations
+### BaseRotationStrategy
 
-#### RoundRobinRotationStrategy
-
-Cycles through keys sequentially.
+Subclass it for a custom strategy:
 
 ```python
-strategy = RoundRobinRotationStrategy(['key1', 'key2', 'key3'])
-key = strategy.get_next_key()  # Returns 'key1', then 'key2', etc.
+from apikeyrotator import BaseRotationStrategy, KeyMetrics
+
+class FirstHealthyStrategy(BaseRotationStrategy):
+    def get_next_key(self, current_key_metrics: dict[str, KeyMetrics] | None = None) -> str:
+        keys = self._get_healthy_keys(current_key_metrics)   # honours rate limits / recovery
+        return keys[0]
 ```
 
-#### RandomRotationStrategy
+| Member | Description |
+|---|---|
+| `get_next_key(current_key_metrics=None) -> str` | **Abstract.** The rotator passes its live `{key: KeyMetrics}`. |
+| `update_keys(new_keys)` | Called when keys are added/removed. |
+| `recovery_timeout` | Class attribute (default `60.0`); `None` disables probing of unhealthy keys. |
+| `_get_healthy_keys(metrics)` | Helper: available keys (all keys if none is available). |
 
-Selects keys randomly.
+### KeyMetrics
 
-```python
-strategy = RandomRotationStrategy(['key1', 'key2', 'key3'])
-key = strategy.get_next_key()  # Random key
-```
+Per-key statistics kept by the rotator (`get_key_statistics()` returns `to_dict()` of each).
 
-#### WeightedRotationStrategy
+| Field | Meaning |
+|---|---|
+| `total_requests`, `successful_requests`, `failed_requests` | Counters. |
+| `success_rate` | EWMA of successes (`ewma_alpha=0.1`). |
+| `avg_response_time` | Average response time, seconds. |
+| `consecutive_failures`, `last_used`, `last_success`, `last_failure` | Recent history (UNIX timestamps). |
+| `rate_limit_hits`, `rate_limit_reset` | 429 count; time until which the key is parked. |
+| `is_healthy` | `False` after 3 consecutive failures or a success rate below 0.3 (after 10+ requests). |
 
-Weighted selection based on assigned weights.
-
-```python
-strategy = WeightedRotationStrategy({
-    'key1': 0.2,  # 20%
-    'key2': 0.3,  # 30%
-    'key3': 0.5   # 50%
-})
-```
-
-#### LRURotationStrategy
-
-Least Recently Used - selects least recently used key.
-
-```python
-strategy = LRURotationStrategy(['key1', 'key2', 'key3'])
-key = strategy.get_next_key()  # Returns oldest unused key
-```
-
-#### HealthBasedStrategy
-
-Selects only healthy keys, automatically excludes failing keys.
-
-```python
-strategy = HealthBasedStrategy(
-    ['key1', 'key2', 'key3'],
-    failure_threshold=5,
-    health_check_interval=300  # Re-check after 5 minutes
-)
-```
-
-### Factory Function
-
-#### create_rotation_strategy()
-
-```python
-def create_rotation_strategy(
-    strategy_type: Union[str, RotationStrategy],
-    keys: Union[List[str], Dict[str, float]],
-    **kwargs
-) -> BaseRotationStrategy
-```
-
-**Example:**
-```python
-# Round robin
-strategy = create_rotation_strategy('round_robin', ['key1', 'key2'])
-
-# Weighted
-strategy = create_rotation_strategy('weighted', {
-    'key1': 1,
-    'key2': 3
-})
-
-# Health-based with custom parameters
-strategy = create_rotation_strategy(
-    'health_based',
-    ['key1', 'key2'],
-    failure_threshold=10
-)
-```
+Methods: `update_from_request(success, response_time=0.0, is_rate_limited=False)`,
+`mark_rate_limited(until)`, `is_available(now=None, recovery_timeout=None)`,
+`get_score()` (0..1 from success rate, speed and recency), `to_dict()`,
+`KeyMetrics.from_dict(data)`.
 
 ---
 
-## Middleware System
+## Shared State Backends
 
-### RotatorMiddleware Protocol
+Used via `state_backend=`. Keys are identified by `sha256(key)` (HMAC-SHA256 with
+`salt`) - raw keys are never stored.
 
-Base protocol for all middleware.
-
-```python
-class RotatorMiddleware(Protocol):
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo
-    async def on_error(self, error_info: ErrorInfo) -> bool
-```
-
-### Middleware Classes
-
-#### CachingMiddleware
-
-Response caching with LRU eviction.
+### RedisStateBackend
 
 ```python
-CachingMiddleware(
-    ttl: int = 300,
-    cache_only_get: bool = True,
-    max_cache_size: int = 1000,
-    logger: Optional[logging.Logger] = None
-)
+RedisStateBackend(client=None, url=None, namespace="apikeyrotator", salt=None, bucket_ttl=3600)
 ```
 
-**Methods:**
-- `clear_cache()`: Clear all cached responses
-- `get_stats() -> Dict`: Get cache statistics (hits, misses, hit_rate)
+| Parameter | Description |
+|---|---|
+| `client` | A sync `redis.Redis` client. Created from `url` if omitted. |
+| `url` | Default `redis://localhost:6379/0`. |
+| `namespace` | Prefix of all Redis keys - use one per upstream provider. |
+| `salt` | HMAC salt for key ids; must be the same on all instances. |
+| `bucket_ttl` | Seconds after which idle token buckets expire. |
 
-**Example:**
-```python
-cache_middleware = CachingMiddleware(ttl=600, max_cache_size=500)
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[cache_middleware]
-)
+Stores `{namespace}:rl` (sorted set: key id → parked-until timestamp),
+`{namespace}:invalid` (set of rejected key ids) and `{namespace}:tb:{id}` (token
+buckets, updated atomically by a Lua script using the Redis server clock).
+Errors never fail requests: the rotator continues with local state and logs a
+warning at most every 30 s. Requires `pip install apikeyrotator[redis]`.
 
-# View stats
-stats = cache_middleware.get_stats()
-print(f"Hit rate: {stats['hit_rate']:.2%}")
-```
-
-#### LoggingMiddleware
-
-Request/response logging with sensitive data masking.
+### InMemoryStateBackend
 
 ```python
-LoggingMiddleware(
-    verbose: bool = True,
-    logger: Optional[logging.Logger] = None,
-    log_level: int = logging.INFO,
-    log_response_time: bool = True,
-    max_key_chars: int = 4
-)
+InMemoryStateBackend(shared=True, salt=None)
 ```
 
-**Features:**
-- Masks sensitive headers (Authorization, X-API-Key, Cookie)
-- Logs request method, URL, status code
-- Optional response time logging
-- Configurable key masking
+Same interface, in-process. Pass one instance to several rotators to share state
+between them.
 
-#### RateLimitMiddleware
+### StateBackend interface
 
-Rate limit tracking and automatic pause.
+For custom backends: `shared` / `blocking` class attributes and
+`report_rate_limited(key_id, until)`, `report_invalid(key_id)`,
+`clear_invalid(key_id=None)`, `snapshot() -> SharedState`,
+`acquire_token(key_id, capacity, refill_per_sec) -> float` (0 = acquired, else
+seconds to wait), `key_id(key)`, `close()`. `SharedState` and `TokenBucket` live in
+`apikeyrotator.state`.
+
+---
+
+## Middleware
+
+### RotatorMiddleware
+
+Base class with optional hooks. Sync rotators call the `*_sync` hooks, async
+rotators the coroutine hooks (which delegate to the sync ones by default), so a
+middleware that only implements `*_sync` works with both.
+
+| Hook | Called | Return |
+|---|---|---|
+| `before_request(_sync)(request_info)` | Before each attempt | `RequestInfo` (possibly modified) or a `ResponseInfo` to short-circuit (e.g. cache hit) |
+| `after_request(_sync)(response_info)` | After each response | `ResponseInfo` |
+| `on_error(_sync)(error_info)` | After a network error or an error response (429/5xx/401/403) | `bool` (informational) |
+
+Exceptions in `on_error` hooks are logged and ignored.
 
 ```python
-RateLimitMiddleware(
-    pause_on_limit: bool = True,
-    max_tracked_keys: int = 1000,
-    logger: Optional[logging.Logger] = None
-)
+from apikeyrotator import RotatorMiddleware
+
+class TraceMiddleware(RotatorMiddleware):
+    def before_request_sync(self, request_info):
+        request_info.headers["X-Request-ID"] = new_request_id()
+        return request_info
 ```
 
-**Methods:**
-- `get_stats() -> Dict`: Get rate limit statistics
-- `clear_limits()`: Clear all rate limit records
+### Data models
 
-**Notes (0.7.0):**
-- Pauses only when the quota is used up (`Remaining: 0` or a 429), not merely because a reset time is in the future.
-- `RateLimit-Reset` (delta seconds) and `X-RateLimit-Reset` (UNIX timestamp) are both understood.
-- `max_wait` (default 300s) caps a single pause.
+| Class | Attributes |
+|---|---|
+| `RequestInfo` | `method`, `url`, `headers`, `cookies`, `key`, `attempt` (0-based), `kwargs` |
+| `ResponseInfo` | `status_code`, `headers` (dict), `content` (bytes, `None` for `stream=True`), `request_info`, `response_time` (seconds or `None`) |
+| `ErrorInfo` | `exception`, `request_info`, `response_info` (for error responses) |
 
-**Features:**
-- Extracts rate limit info from headers (X-RateLimit-*, Retry-After)
-- Automatic waiting when rate limited
-- Per-key rate limit tracking
-
-### Middleware Data Models
-
-#### RequestInfo
+### CachingMiddleware
 
 ```python
-@dataclass
-class RequestInfo:
-    method: str
-    url: str
-    headers: Dict[str, str]
-    cookies: Dict[str, str]
-    key: str
-    attempt: int
-    kwargs: Dict[str, Any]
+CachingMiddleware(ttl=300, cache_only_get=True, max_cache_size=1000,
+                  max_cache_size_bytes=100 * 1024 * 1024, max_cacheable_size=10 * 1024 * 1024, logger=None)
 ```
 
-#### ResponseInfo
+LRU cache of `2xx` responses. The cache key includes method, URL, `params`,
+non-auth headers and (for POST/PUT/PATCH with `cache_only_get=False`) the body.
+Responses with `Set-Cookie`, `Cache-Control: no-store/private` or streaming
+content types are not cached.
+
+Methods: `get_stats()` → `{"cache_size", "hits", "misses", "total", "hit_rate", "size_bytes"}`, `clear()`.
+
+### LoggingMiddleware
 
 ```python
-@dataclass
-class ResponseInfo:
-    status_code: int
-    headers: Dict[str, str]
-    content: Any
-    request_info: RequestInfo
+LoggingMiddleware(verbose=True, logger=None, log_level=logging.INFO,
+                  log_response_time=True, max_key_chars=4, max_logs_per_second=1000)
 ```
 
-#### ErrorInfo
+Logs requests, responses (with response time) and errors; masks keys and
+`Authorization`/`X-API-Key`/`Cookie` headers; drops messages above
+`max_logs_per_second`. `log_level` is applied only to its own default logger.
+
+### RateLimitMiddleware
 
 ```python
-@dataclass
-class ErrorInfo:
-    exception: Exception
-    request_info: RequestInfo
-    response_info: Optional[ResponseInfo] = None
+RateLimitMiddleware(pause_on_limit=True, max_tracked_keys=1000, logger=None, max_wait=300.0)
 ```
+
+Tracks `X-RateLimit-*` / `RateLimit-*` headers and 429 `Retry-After` per key and,
+with `pause_on_limit=True`, waits before using a key whose quota is used up
+(`remaining == 0`), for at most `max_wait` seconds. `get_stats()` →
+`{"tracked_keys", "active_limits", "max_tracked_keys"}`.
+
+The rotator itself already skips parked keys; this middleware is useful when you
+want to *wait* for a specific key instead of switching.
 
 ---
 
@@ -576,357 +452,171 @@ class ErrorInfo:
 
 ### RotatorMetrics
 
-Central metrics collector.
+Available as `rotator.metrics` (when `enable_metrics=True`).
 
 ```python
-class RotatorMetrics:
-    def record_request(
-        self,
-        key: str,
-        endpoint: str,
-        success: bool,
-        response_time: float,
-        is_rate_limited: bool = False
-    )
-    
-    def get_metrics(self) -> Dict[str, Any]
-    def get_endpoint_stats(self, endpoint: str) -> Dict[str, Any]
-    def get_top_endpoints(self, limit: int = 10) -> List[Tuple[str, int]]
-    def reset()
+RotatorMetrics(max_endpoints=1000)
 ```
 
-**Metrics Provided:**
-- Total requests
-- Successful/failed requests
-- Success rate
-- Uptime
-- Per-endpoint statistics
-- Average response times
+| Method | Description |
+|---|---|
+| `get_metrics()` | `{"total_requests", "successful_requests", "failed_requests", "success_rate", "uptime_seconds", "endpoint_stats": {endpoint: {...}}}` |
+| `get_endpoint_stats(endpoint)` | `{"total_requests", "successful_requests", "failed_requests", "avg_response_time"}` |
+| `get_top_endpoints(limit=10)` | `[(endpoint, total_requests), ...]` |
+| `record_request(key, endpoint, success, response_time, is_rate_limited=False)` | Called by the rotator for every attempt. |
+| `reset()` | Clears all counters. |
 
-**Example:**
-```python
-rotator = APIKeyRotator(api_keys=["key1"], enable_metrics=True)
-
-# Make requests...
-for i in range(100):
-    rotator.get(f"https://api.example.com/item/{i}")
-
-# Get metrics
-metrics = rotator.get_metrics()
-print(f"Success rate: {metrics['success_rate']:.2%}")
-print(f"Total requests: {metrics['total_requests']}")
-
-# Get key statistics
-key_stats = rotator.get_key_statistics()
-for key, stats in key_stats.items():
-    print(f"Key {key[:4]}****: {stats['successful_requests']} successful")
-```
+Endpoints are URLs without query string; beyond `max_endpoints` distinct
+endpoints, stats are aggregated under `"__other__"`, so memory stays bounded.
 
 ### PrometheusExporter
 
-Export metrics in Prometheus format.
-
 ```python
-from apikeyrotator.metrics import PrometheusExporter
+from apikeyrotator import PrometheusExporter
 
-exporter = PrometheusExporter()
-metrics_text = exporter.export(rotator.metrics)
-
-# Write to file or serve via HTTP
-with open('/var/lib/prometheus/node_exporter/rotator.prom', 'w') as f:
-    f.write(metrics_text)
+text = PrometheusExporter.export(rotator.metrics, key_metrics=rotator.get_key_statistics())
 ```
+
+Returns the Prometheus text format: `rotator_total_requests`,
+`rotator_successful_requests`, `rotator_failed_requests`, `rotator_uptime_seconds`,
+per-key `rotator_key_*{key="sk-1****"}` (masked) and per-endpoint
+`rotator_endpoint_*{endpoint="..."}` series.
 
 ---
 
 ## Secret Providers
 
-### SecretProvider Protocol
+All providers implement `async get_keys() -> list[str]` and
+`async refresh_keys() -> list[str]` (the `SecretProvider` protocol). Rotators call
+them from sync code transparently.
 
-Base protocol for loading keys from external sources.
-
-```python
-class SecretProvider(Protocol):
-    async def get_keys(self) -> List[str]
-    async def refresh_keys(self) -> List[str]
-```
-
-### Provider Implementations
-
-#### EnvironmentSecretProvider
-
-Load from environment variable.
+| Provider | Constructor | Notes |
+|---|---|---|
+| `EnvironmentSecretProvider` | `(env_var="API_KEYS")` | Comma-separated value. |
+| `FileSecretProvider` | `(file_path, logger=None)` | JSON array, CSV and/or one key per line (`#` comments). |
+| `AWSSecretsManagerProvider` | `(secret_name, region_name="us-east-1", logger=None)` | `pip install apikeyrotator[aws]`. Secret: JSON array, `{"keys": [...]}` / `{"api_keys": [...]}`, JSON object values, or CSV. Retries transient errors 3 times. |
+| `GCPSecretManagerProvider` | `(project_id, secret_id, version_id="latest", logger=None)` | `pip install apikeyrotator[gcp]`. Same payload formats. |
 
 ```python
-from apikeyrotator.providers import EnvironmentSecretProvider
+from apikeyrotator import create_secret_provider
 
-provider = EnvironmentSecretProvider(env_var="MY_API_KEYS")
-rotator = APIKeyRotator(secret_provider=provider)
+create_secret_provider("env", env_var="MY_KEYS")                  # also "environment"
+create_secret_provider("file", file_path="keys.txt")
+create_secret_provider("aws", secret_name="prod/keys")           # also "aws_secrets_manager"
+create_secret_provider("gcp", project_id="p", secret_id="keys")  # also "gcp_secret_manager"
 ```
 
-#### FileSecretProvider
-
-Load from file (JSON, CSV, or line-by-line).
-
-```python
-from apikeyrotator.providers import FileSecretProvider
-
-provider = FileSecretProvider(file_path="keys.json")
-# Supports: ["key1", "key2"] or key1,key2,key3 or one-per-line
-```
-
-#### AWSSecretsManagerProvider
-
-Load from AWS Secrets Manager.
-
-```python
-from apikeyrotator.providers import AWSSecretsManagerProvider
-
-provider = AWSSecretsManagerProvider(
-    secret_name="my-api-keys",
-    region_name="us-east-1"
-)
-
-rotator = APIKeyRotator(secret_provider=provider)
-```
-
-**Requires:** `pip install boto3`
-
-#### GCPSecretManagerProvider
-
-Load from Google Cloud Secret Manager.
-
-```python
-from apikeyrotator.providers import GCPSecretManagerProvider
-
-provider = GCPSecretManagerProvider(
-    project_id="my-project",
-    secret_id="api-keys",
-    version_id="latest"
-)
-```
-
-**Requires:** `pip install google-cloud-secret-manager`
-
-### Factory Function
-
-```python
-from apikeyrotator.providers import create_secret_provider
-
-# Environment
-provider = create_secret_provider('env', env_var='API_KEYS')
-
-# File
-provider = create_secret_provider('file', file_path='keys.txt')
-
-# AWS
-provider = create_secret_provider(
-    'aws_secrets_manager',
-    secret_name='my-keys',
-    region_name='us-east-1'
-)
-
-# GCP
-provider = create_secret_provider(
-    'gcp_secret_manager',
-    project_id='my-project',
-    secret_id='api-keys'
-)
-```
+Custom providers only need the two async methods.
 
 ---
 
-## Configuration Management
+## Error Classification
 
-### ConfigLoader
+### ErrorClassifier
 
-Manages persistent configuration storage.
+```python signature
+ErrorClassifier(custom_retryable_codes: list[int] | None = None)
+```
+
+| Method | Returns |
+|---|---|
+| `classify_error(response=None, exception=None)` | `ErrorType` |
+| `is_retryable(response=None, exception=None)` | `True` for `RATE_LIMIT`, `TEMPORARY`, `NETWORK` |
+| `should_switch_key(response=None, exception=None)` | `True` for `RATE_LIMIT`, `PERMANENT` |
+| `should_remove_key(response=None, exception=None)` | `True` for 401 / 403 |
+| `get_retry_delay(response=None, default_delay=1.0)` | `Retry-After` (seconds or HTTP date), else `5 * default_delay` for 429, else `default_delay` |
+
+| `ErrorType` | Statuses / exceptions |
+|---|---|
+| `RATE_LIMIT` | 429 |
+| `TEMPORARY` | 5xx, 408, 409, 425, 511, `custom_retryable_codes` |
+| `PERMANENT` | other 4xx (401/403 remove the key; the rest are returned to the caller) |
+| `NETWORK` | connection errors and timeouts of requests / aiohttp / httpx |
+| `UNKNOWN` | success statuses and unrecognised exceptions |
+
+Subclass it to change the rules, e.g. treat 402 as a key problem:
 
 ```python
-ConfigLoader(
-    config_file: str = "rotator_config.json",
-    logger: Optional[logging.Logger] = None
-)
+from apikeyrotator import ErrorClassifier
+
+class MyClassifier(ErrorClassifier):
+    def should_remove_key(self, response=None, exception=None):
+        return response is not None and response.status_code in (401, 402, 403)
 ```
 
-**Methods:**
-- `load_config() -> Dict[str, Any]`: Load configuration
-- `save_config(config: Optional[Dict] = None)`: Save configuration
-- `get(key: str, default: Any = None) -> Any`: Get config value
-- `update_config(new_data: Dict)`: Update and save
-- `clear()`: Clear configuration
-- `delete_config_file()`: Remove config file
-
-**Configuration Format:**
-```json
-{
-  "successful_headers": {
-    "api.example.com": {
-      "User-Agent": "...",
-      "Accept": "application/json"
-    }
-  }
-}
-```
-
----
-
-## Exceptions
-
-### NoAPIKeysError
-
-Raised when no API keys are provided or found.
-
-```python
-class NoAPIKeysError(APIKeyError):
-    """No API keys found"""
-```
-
-### AllKeysExhaustedError
-
-Raised when all API keys fail after maximum retries.
-
-```python
-class AllKeysExhaustedError(APIKeyError):
-    """All keys are exhausted"""
-```
+Header helpers (in `apikeyrotator.utils`): `parse_retry_after(headers)`,
+`parse_rate_limit_headers(headers) -> (remaining, reset_timestamp)`,
+`get_header(headers, name)` (case-insensitive).
 
 ---
 
 ## Utilities
 
-### Retry Utilities
-
-#### retry_with_backoff()
+### CircuitBreakerConfig / CircuitBreaker
 
 ```python
-def retry_with_backoff(
-    func: Callable,
-    retries: int = 3,
-    backoff_factor: float = 0.5,
-    exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
-) -> Any
+CircuitBreakerConfig(failure_threshold=5, recovery_timeout=30.0, half_open_max_calls=1)
+CircuitBreaker(failure_threshold=5, timeout=60, half_open_max_calls=1, name="")
 ```
 
-Synchronous retry with exponential backoff.
-
-#### async_retry_with_backoff()
-
-```python
-async def async_retry_with_backoff(
-    func: Callable,
-    retries: int = 3,
-    backoff_factor: float = 0.5,
-    exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception
-) -> Any
-```
-
-Asynchronous retry with exponential backoff.
-
-#### exponential_backoff()
+`CircuitBreaker` is the thread-safe breaker the rotator uses per host; you can use
+it standalone: `allow_request()`, `record_success()`, `record_failure()`,
+`retry_after()`, `get_state()` (`"CLOSED"`, `"OPEN"`, `"HALF_OPEN"`), `reset()`,
+`release_probe()`, `CircuitBreaker.from_config(config, name="")`.
 
 ```python
-def exponential_backoff(
-    attempt: int,
-    base_delay: float = 1.0,
-    max_delay: float = 60.0
-) -> float
-```
+from apikeyrotator import CircuitBreaker
 
-Calculate delay for exponential backoff.
-
-#### jittered_backoff()
-
-```python
-def jittered_backoff(
-    attempt: int,
-    base_delay: float = 1.0,
-    max_delay: float = 60.0
-) -> float
-```
-
-Calculate delay with random jitter (prevents thundering herd).
-
-### Circuit Breaker
-
-```python
-class CircuitBreaker:
-    def __init__(
-        self,
-        failure_threshold: int = 5,
-        timeout: int = 60
-    )
-    
-    def allow_request(self) -> bool
-    def record_success()
-    def record_failure()
-    def get_state(self) -> str  # 'CLOSED', 'OPEN', 'HALF_OPEN'
-    def reset()
-```
-
-**Example:**
-```python
 breaker = CircuitBreaker(failure_threshold=5, timeout=60)
-
 if breaker.allow_request():
     try:
-        response = rotator.get(url)
+        do_call()
         breaker.record_success()
     except Exception:
         breaker.record_failure()
+        raise
 ```
 
-### Decorators
-
-#### measure_time()
+### Retry helpers
 
 ```python
-@measure_time
-def my_function():
-    # Function execution time will be logged
-    pass
+retry_with_backoff(func, retries=3, backoff_factor=0.5, exceptions=Exception)
+await async_retry_with_backoff(func, retries=3, backoff_factor=0.5, exceptions=Exception)
 ```
 
-#### measure_time_async()
+Call `func()` (or `await func()`) up to `retries` times, sleeping
+`backoff_factor * 2 ** attempt` between attempts; the last exception is re-raised.
 
-```python
-@measure_time_async
-async def my_async_function():
-    # Async function execution time will be logged
-    pass
-```
+Also in `apikeyrotator.utils`: `exponential_backoff(attempt, base_delay=1.0, max_delay=60.0)`,
+`jittered_backoff(...)`, decorators `measure_time` / `measure_time_async`
+(log execution time at DEBUG level).
 
 ---
 
-## Type Hints
+## Configuration Loader
 
-Common type hints used throughout the library:
-
-```python
-from typing import Optional, Union, List, Dict, Tuple, Callable, Any
-import requests
-import aiohttp
-
-# Key types
-KeyType = Union[List[str], str]
-
-# Callback types
-RetryCallback = Callable[[requests.Response], bool]
-HeaderCallback = Callable[
-    [str, Optional[Dict[str, str]]],
-    Union[Dict[str, str], Tuple[Dict[str, str], Dict[str, str]]]
-]
-
-# Response types
-SyncResponse = requests.Response
-AsyncResponse = aiohttp.ClientResponse
+```python signature
+ConfigLoader(config_file: str, logger=None)
 ```
+
+JSON / YAML (`.json`, `.yaml`, `.yml`) configuration file: `load_config()`,
+`save_config(config=None)`, `get(key, default=None)`, `update_config(new_data)`,
+`clear()`, `delete_config_file()`. A missing or broken file loads as `{}`.
+
+## Key Parsing
+
+```python signature
+parse_keys(api_keys=None, env_var="API_KEYS", logger=None) -> list[str]
+```
+
+Accepts a list/tuple or a comma-separated string; falls back to the environment
+variable; strips blanks and removes duplicates. Raises `NoAPIKeysError`.
 
 ---
 
-## Next Steps
+## See also
 
-- See [Middleware Guide](MIDDLEWARE.md) for detailed middleware usage
-- Check [Examples](EXAMPLES.md) for practical usage
-- Read [Advanced Usage](ADVANCED_USAGE.md) for power features
-- Review [Getting Started](GETTING_STARTED.md) for basics
+- [Resilience & Scaling](RESILIENCE.md) - deadlines, circuit breaker, rate limits, Redis, httpx
+- [Middleware Guide](MIDDLEWARE.md)
+- [Error Handling](ERROR_HANDLING.md)
+- [Examples](EXAMPLES.md)

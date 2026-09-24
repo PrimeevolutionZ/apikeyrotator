@@ -18,6 +18,7 @@ This documentation will help you get started with APIKeyRotator and master its a
 | [Error Handling](ERROR_HANDLING.md)   | Comprehensive error management guide         | Debugging, production deployment       |
 | [Resilience & Scaling](RESILIENCE.md) | Deadlines, circuit breaker, rate limits, Redis, httpx | Production under load, many workers |
 | [FAQ](FAQ.md)                         | Frequently asked questions                   | Quick answers to common questions      |
+| [Benchmarks](../benchmarks/README.md) | Measured speed, CPU and memory; how to compare versions | Performance work, CI |
 
 ---
 
@@ -61,9 +62,9 @@ Perfect for beginners and those who want to understand the basics.
 **Topics covered:**
 - Installation and setup
 - Basic synchronous and asynchronous usage
-- Core concepts: key rotation, retry logic, header detection
-- Common use cases
-- Configuration with `.env` files
+- Core concepts: key rotation, retries, authorization header
+- Common use cases and a production setup
+- Keys from `.env` / environment variables, logging
 
 **Start here if you:**
 - Are new to APIKeyRotator
@@ -77,16 +78,13 @@ Perfect for beginners and those who want to understand the basics.
 Complete technical reference for all classes, methods, and parameters.
 
 **Topics covered:**
-- `APIKeyRotator` class (synchronous)
-- `AsyncAPIKeyRotator` class (asynchronous)
-- Error classification system
-- Rotation strategies
-- Middleware system
-- Metrics and monitoring
-- Secret providers
-- Configuration management
-- Custom callbacks
-- Exception types
+- `APIKeyRotator` / `AsyncAPIKeyRotator`: every constructor parameter, method and the retry rules
+- Exceptions
+- Multi-provider routing (`FallbackRouter`)
+- Rotation strategies and `KeyMetrics`
+- Shared state backends (Redis, in-memory)
+- Middleware, metrics, secret providers
+- Error classification, circuit breaker and retry utilities
 
 **Use this when you:**
 - Need detailed parameter information
@@ -101,7 +99,7 @@ Comprehensive guide to the middleware system for request/response interception.
 
 **Topics covered:**
 - Middleware architecture and lifecycle
-- Built-in middleware (Caching, Logging, Rate Limit, Retry)
+- Built-in middleware (Caching, Logging, Rate Limit)
 - Creating custom middleware
 - Middleware best practices
 - Advanced middleware patterns
@@ -143,15 +141,15 @@ Deep dive into advanced features and customization options.
 
 **Topics covered:**
 - Middleware system overview
-- Rotation strategies (round-robin, random, weighted, LRU, health-based)
+- Rotation strategies (round-robin, random, weighted, LRU, health-based, failover)
 - Metrics and monitoring
 - Secret providers (AWS, GCP, File, Environment)
 - Custom callbacks (retry logic, headers)
 - Anti-bot evasion (User-Agent rotation, proxies, delays)
 - Custom error classification
-- Session management
-- Configuration management
-- Performance optimization
+- Connections and cleanup
+- Configuration file
+- Performance and best practices
 
 **Read this to:**
 - Unlock advanced features
@@ -178,6 +176,21 @@ Comprehensive guide to error management and troubleshooting.
 - Debugging issues
 - Building resilient applications
 - Understanding error flows
+
+---
+
+### [Resilience & Scaling](RESILIENCE.md)
+
+Running under load and across many processes.
+
+**Topics covered:**
+- Safe retries of POST/PATCH (idempotency)
+- Request deadlines (`total_timeout`)
+- Per-host circuit breaker
+- Client-side rate limits (token bucket, `X-RateLimit-*` hints)
+- Shared state between processes (Redis)
+- Background key refresh
+- httpx backend and HTTP/2, logging
 
 ---
 
@@ -210,13 +223,15 @@ Quick answers to frequently asked questions.
 | Install the library | [Getting Started](GETTING_STARTED.md#installation)   |
 | Make first request  | [Getting Started](GETTING_STARTED.md#quick-start)    |
 | Use middleware      | [Middleware Guide](MIDDLEWARE.md)                    |
-| Handle rate limits  | [Advanced Usage](ADVANCED_USAGE.md#anti-bot-evasion) |
+| Handle rate limits  | [Resilience](RESILIENCE.md#client-side-rate-limits)  |
 | Use with async code | [API Reference](API_REFERENCE.md#asyncapikeyrotator) |
 | Add custom headers  | [Advanced Usage](ADVANCED_USAGE.md#custom-callbacks) |
 | Track metrics       | [Advanced Usage](ADVANCED_USAGE.md#metrics-and-monitoring) |
 | Handle errors       | [Error Handling](ERROR_HANDLING.md)                  |
 | See examples        | [Examples](EXAMPLES.md)                              |
-| Debug issues        | [FAQ](FAQ.md#error-handling)                         |
+| Debug issues        | [Error Handling](ERROR_HANDLING.md#troubleshooting)  |
+| Many workers / Redis | [Resilience](RESILIENCE.md#shared-state-between-processes-redis) |
+| Measure performance | [Benchmarks](../benchmarks/README.md)                |
 
 ### Code Snippets
 
@@ -247,16 +262,13 @@ rotator = APIKeyRotator(
 #### With Rate Limit Protection
 
 ```python
-from apikeyrotator.middleware import RateLimitMiddleware
-
-rate_limit = RateLimitMiddleware(pause_on_limit=True)
+from apikeyrotator import APIKeyRotator
 
 rotator = APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
-    max_retries=5,
-    base_delay=2.0,
-    random_delay_range=(1.0, 3.0),
-    middlewares=[rate_limit]
+    key_rate_limit=(60, 60),   # at most 60 requests/minute per key
+    total_timeout=30,          # bound the whole request, including waits
+    circuit_breaker=True,      # fail fast while the host is down
 )
 ```
 
@@ -287,8 +299,8 @@ rotator = APIKeyRotator(
 
 try:
     response = rotator.get("https://api.example.com/data")
-except AllKeysExhaustedError:
-    print("All keys failed")
+except AllKeysExhaustedError as e:
+    print("All attempts failed:", e.last_response or e.last_exception)
 
 # View metrics
 metrics = rotator.get_metrics()
@@ -300,12 +312,12 @@ print(f"Success rate: {metrics['success_rate']:.2%}")
 ## 🔑 Key Features
 
 ### Effortless Integration
-Drop-in replacement for `requests` and `aiohttp` with familiar API.
+Familiar `requests`-style API; works with `requests`, `aiohttp` or `httpx` (HTTP/2).
 
 [Learn more in Getting Started](GETTING_STARTED.md)
 
 ### Automatic Key Rotation
-Seamlessly cycles through API keys to distribute load and bypass rate limits.
+Cycles through API keys to distribute load; parks rate-limited keys and drops rejected ones.
 
 [See rotation strategies](API_REFERENCE.md#rotation-strategies)
 
@@ -315,7 +327,7 @@ Powerful request/response interception for caching, logging, and custom processi
 [Explore middleware](MIDDLEWARE.md)
 
 ### Smart Retry Logic
-Exponential backoff and intelligent error classification for resilient requests.
+Exponential backoff, request deadlines, safe handling of non-idempotent requests and a per-host circuit breaker.
 
 [Understand error handling](ERROR_HANDLING.md)
 
@@ -334,10 +346,15 @@ Load keys from AWS Secrets Manager, GCP Secret Manager, or files.
 
 [See secret providers](ADVANCED_USAGE.md#secret-providers)
 
-### Intelligent Headers
-Auto-detects authorization patterns and persists successful configurations.
+### Smart Headers
+Infers the authorization header from the key format; custom schemes via `header_callback`.
 
-[Learn about header management](ADVANCED_USAGE.md#dynamic-header-generation)
+[Learn about header management](ADVANCED_USAGE.md#dynamic-headers-and-cookies)
+
+### Shared State & Rate Limits
+Token buckets per key and shared limits/rejected keys across processes with Redis.
+
+[Resilience & Scaling](RESILIENCE.md)
 
 ---
 
@@ -379,7 +396,7 @@ Production-grade features with secret providers, metrics, and middleware.
 API_KEYS=key1,key2,key3
 ```
 
-[Configuration guide](GETTING_STARTED.md#using-environment-variables)
+[Configuration guide](GETTING_STARTED.md#keys-from-the-environment)
 
 ### Programmatic Setup
 
@@ -397,7 +414,8 @@ rotator = APIKeyRotator(
     proxy_list=[...],
     middlewares=[CachingMiddleware(ttl=600)],
     rotation_strategy="health_based",
-    enable_metrics=True
+    total_timeout=30,
+    circuit_breaker=True,
 )
 ```
 
@@ -416,7 +434,9 @@ rotator = APIKeyRotator(
 | Rate limit handling  | ❌ Manual tracking   | ✅ Automatic     |
 | Error classification | ❌ Status codes only | ✅ Intelligent   |
 | Anti-bot features    | ❌ Not included      | ✅ Comprehensive |
-| Session management   | ❌ Manual            | ✅ Optimized     |
+| Connection pooling   | ❌ Manual            | ✅ Built-in      |
+| Circuit breaker      | ❌ Custom code       | ✅ Per host      |
+| Shared limits (Redis)| ❌ Custom code       | ✅ Built-in      |
 | Middleware system    | ❌ Not available     | ✅ Full support  |
 | Metrics collection   | ❌ Custom code       | ✅ Built-in      |
 | Secret providers     | ❌ Manual            | ✅ AWS, GCP, etc |
@@ -482,16 +502,15 @@ Recommended reading order:
 
 ---
 
-## 🆕 What's New in 0.6.1
+## 🆕 What's New in 0.8.0
 
-**Major Features:**
-- 🛣️ **Multi-Provider Routing**: `FallbackRouter` and `ProviderRoute`
-- 🎯 **Middleware System**: Caching, Logging, Rate Limit middleware
-- 📊 **Metrics Collection**: Built-in metrics with Prometheus export
-- 🔐 **Secret Providers**: AWS, GCP, File, Environment providers
-- 🔄 **Rotation Strategies**: Round-robin, Random, Weighted, LRU, Health-based
-- 🧵 **Thread Safety**: Full thread-safe implementation
-- 🔧 **Enhanced Error Classification**: More granular error handling
+- 🧯 **Resilience**: request deadlines (`total_timeout`), per-host circuit breaker, safe retries of POST/PATCH
+- 🚦 **Rate limits**: client-side token bucket per key, `X-RateLimit-Remaining` hints
+- 🔗 **Shared state**: `RedisStateBackend` shares limits, rejected keys and token buckets between processes
+- 🔄 **Background key refresh** from secret providers
+- 🌐 **httpx backend** with HTTP/2, `failover` rotation strategy
+- 🪶 **Leaner core**: 69 ms import, ~230 bytes per key; Python 3.12+
+- 🔇 The library no longer configures logging output (use `logging.basicConfig`)
 
 [View complete changelog](../CHANGELOG.md)
 

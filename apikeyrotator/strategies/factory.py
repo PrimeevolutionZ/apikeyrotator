@@ -4,6 +4,7 @@ Factory for creating rotation strategies
 
 
 from .base import BaseRotationStrategy, RotationStrategy
+from .failover import FailoverRotationStrategy
 from .health_based import HealthBasedStrategy
 from .lru import LRURotationStrategy
 from .random import RandomRotationStrategy
@@ -20,7 +21,7 @@ def create_rotation_strategy(
     Factory function for creating a rotation strategy.
 
     Args:
-        strategy_type: Strategy type ('round_robin', 'random', 'weighted', 'lru', 'health_based')
+        strategy_type: Strategy type ('round_robin', 'random', 'weighted', 'lru', 'health_based', 'failover')
                        or RotationStrategy enum instance
         keys: List of keys or weight dictionary for weighted strategy
         **kwargs: Additional parameters for specific strategy
@@ -72,6 +73,7 @@ def create_rotation_strategy(
         "weighted": WeightedRotationStrategy,
         "lru": LRURotationStrategy,
         "health_based": HealthBasedStrategy,
+        "failover": FailoverRotationStrategy,
     }
 
     # Find strategy class

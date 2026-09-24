@@ -1,14 +1,15 @@
 # Middleware Guide
 
-Comprehensive guide to APIKeyRotator's middleware system for request/response interception and processing.
+Middleware intercepts every attempt the rotator makes: before the request is
+sent, after a response arrives, and when an attempt fails.
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Middleware Architecture](#middleware-architecture)
+- [How Middleware Runs](#how-middleware-runs)
 - [Built-in Middleware](#built-in-middleware)
 - [Creating Custom Middleware](#creating-custom-middleware)
-- [Middleware Best Practices](#middleware-best-practices)
+- [Best Practices](#best-practices)
 - [Advanced Patterns](#advanced-patterns)
 - [Performance Considerations](#performance-considerations)
 
@@ -16,124 +17,79 @@ Comprehensive guide to APIKeyRotator's middleware system for request/response in
 
 ## Overview
 
-Middleware in APIKeyRotator provides a powerful way to intercept and modify HTTP requests and responses. Middleware runs in a pipeline, allowing you to:
+Typical uses:
 
-- **Cache responses** to reduce API calls
-- **Log requests and responses** for debugging and monitoring
-- **Track rate limits** and pause when necessary
-- **Implement custom retry logic** beyond the rotator's built-in retries
-- **Modify headers** dynamically
-- **Validate responses** before they reach your application
-- **Collect metrics** and statistics
-- **Handle errors** in a centralized way
+- **Cache** responses to avoid repeated calls
+- **Log** requests and responses (with secrets redacted)
+- **Track rate limits** and wait for a key's quota
+- **Modify headers** (request ids, signatures, tracing)
+- **Validate** responses before they reach your code
+- **Collect** custom metrics
 
-### Key Concepts
-
-**Middleware Pipeline**: Middleware executes in order:
-```
-Request → Middleware 1 → Middleware 2 → Middleware 3 → API
-API → Middleware 3 → Middleware 2 → Middleware 1 → Response
-```
-
-**Three Hooks**:
-- `before_request`: Called before sending the request
-- `after_request`: Called after receiving a successful response
-- `on_error`: Called when an error occurs
+Retries are built into the rotator (`max_retries`, `total_timeout`); middleware
+is not needed for them.
 
 ---
 
-## Middleware Architecture
+## How Middleware Runs
 
-### RotatorMiddleware Protocol
+### Hooks
 
-All middleware must implement the `RotatorMiddleware` protocol:
+Subclass `RotatorMiddleware` and implement any of these hooks:
 
-```python
-from apikeyrotator.middleware import RequestInfo, ResponseInfo, ErrorInfo
+| Hook | Called | Must return |
+|---|---|---|
+| `before_request_sync(request_info)` / `async before_request(...)` | before each attempt | the `RequestInfo` (possibly modified), **or** a `ResponseInfo` to answer without calling the API |
+| `after_request_sync(response_info)` / `async after_request(...)` | after each response (any status) | the `ResponseInfo` |
+| `on_error_sync(error_info)` / `async on_error(...)` | after a network error, or an error response the rotator retries (429, 5xx, 401/403) | `bool` (informational; exceptions raised here are logged and ignored) |
 
-class RotatorMiddleware(Protocol):
-    """Base protocol for middleware."""
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        """
-        Called before sending the request.
-        
-        Args:
-            request_info: Information about the request
-            
-        Returns:
-            Modified request_info (or original if no changes)
-        """
-        return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        """
-        Called after receiving a successful response.
-        
-        Args:
-            response_info: Information about the response
-            
-        Returns:
-            Modified response_info (or original if no changes)
-        """
-        return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        """
-        Called when an error occurs.
-        
-        Args:
-            error_info: Information about the error
-            
-        Returns:
-            True if error was handled (prevents propagation)
-            False to allow error to propagate
-        """
-        return False
+`APIKeyRotator` calls the `*_sync` hooks, `AsyncAPIKeyRotator` calls the
+coroutine hooks. The base class's coroutine hooks delegate to the sync ones, so
+**implementing `*_sync` makes a middleware work with both rotators**. Override the
+`async` versions only when they need to `await` something.
+
+### Order
+
+Middlewares run in list order for every hook:
+
 ```
+attempt:   before_request: M1 → M2 → M3 → HTTP request
+response:  after_request:  M1 → M2 → M3 → rotator decides (return / retry)
+failure:   on_error:       M1 → M2 → M3 → rotator retries or gives up
+```
+
+If a `before_request` hook returns a `ResponseInfo` (e.g. a cache hit), the
+remaining `before_request` hooks are skipped and that response is returned to the
+caller - no HTTP request, no retry logic.
+
+Hooks run once **per attempt**: a request retried 3 times produces 3
+`before_request` calls with `request_info.attempt` = 0, 1, 2.
 
 ### Data Models
 
-#### RequestInfo
+`RequestInfo`:
 
-Contains all information about an outgoing request:
+| Attribute | Description |
+|---|---|
+| `method`, `url` | HTTP method and URL |
+| `headers`, `cookies` | Headers/cookies that will be sent (mutable) |
+| `key` | API key used for this attempt |
+| `attempt` | Attempt number, 0-based |
+| `kwargs` | Arguments passed to the HTTP client (`params`, `json`, ...). **Do not add your own entries** - they are passed to the client. |
 
-```python
-@dataclass
-class RequestInfo:
-    method: str              # HTTP method (GET, POST, etc.)
-    url: str                 # Target URL
-    headers: Dict[str, str]  # Request headers
-    cookies: Dict[str, str]  # Request cookies
-    key: str                 # Current API key being used
-    attempt: int             # Current attempt number (0-indexed)
-    kwargs: Dict[str, Any]   # Additional request parameters
-```
+`ResponseInfo`:
 
-#### ResponseInfo
+| Attribute | Description |
+|---|---|
+| `status_code`, `headers` | Status and response headers (dict) |
+| `content` | Body as bytes (`None` for `stream=True`) |
+| `request_info` | The `RequestInfo` of this attempt (same object) |
+| `response_time` | Seconds the attempt took |
 
-Contains information about a received response:
-
-```python
-@dataclass
-class ResponseInfo:
-    status_code: int         # HTTP status code
-    headers: Dict[str, str]  # Response headers
-    content: Any             # Response body
-    request_info: RequestInfo  # Original request info
-```
-
-#### ErrorInfo
-
-Contains information about an error:
-
-```python
-@dataclass
-class ErrorInfo:
-    exception: Exception      # The exception that occurred
-    request_info: RequestInfo # Original request info
-    response_info: Optional[ResponseInfo]  # Response if available
-```
+`ErrorInfo`: `exception`, `request_info`, `response_info` (set for error
+responses; the exception is then an `HTTPStatusError` with `.status_code`).
+Responses returned to the caller (2xx, most 4xx, non-retried POST errors) go
+through `after_request` only.
 
 ---
 
@@ -141,493 +97,250 @@ class ErrorInfo:
 
 ### CachingMiddleware
 
-Caches GET request responses to reduce API calls.
-
-#### Features
-
-- **LRU Eviction**: Automatically evicts least recently used entries when cache is full
-- **TTL Support**: Cached entries expire after specified time
-- **Configurable Size**: Control maximum cache size
-- **Statistics**: Track hit rate and cache effectiveness
-
-#### Usage
+Caches `2xx` responses (GET only by default) with TTL and LRU eviction.
 
 ```python
-from apikeyrotator import APIKeyRotator
-from apikeyrotator.middleware import CachingMiddleware
+from apikeyrotator import APIKeyRotator, CachingMiddleware
 
-# Create cache middleware
 cache = CachingMiddleware(
-    ttl=600,              # Cache for 10 minutes
-    cache_only_get=True,  # Only cache GET requests
-    max_cache_size=1000   # Store up to 1000 responses
+    ttl=600,                               # seconds
+    cache_only_get=True,                   # set False to also cache POST/PUT/PATCH (body is part of the key)
+    max_cache_size=1000,                   # entries
+    max_cache_size_bytes=100 * 1024 ** 2,  # total size
+    max_cacheable_size=10 * 1024 ** 2,     # larger responses are not cached
 )
+rotator = APIKeyRotator(api_keys=["key1", "key2"], middlewares=[cache])
 
-# Use with rotator
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2"],
-    middlewares=[cache]
-)
+response1 = rotator.get("https://api.example.com/data")   # miss - calls the API
+response2 = rotator.get("https://api.example.com/data")   # hit - no network call
 
-# First request - cache miss
-response1 = rotator.get("https://api.example.com/data")
-
-# Second request - cache hit (instant)
-response2 = rotator.get("https://api.example.com/data")
-
-# View statistics
 stats = cache.get_stats()
-print(f"Hit rate: {stats['hit_rate']:.2%}")
-print(f"Cache size: {stats['cache_size']}/{stats['max_cache_size']}")
+print(f"Hit rate: {stats['hit_rate']:.2%} ({stats['hits']} hits / {stats['total']})")
+print(f"Entries: {stats['cache_size']}, bytes: {stats['size_bytes']}")
 
-# Clear cache if needed
-cache.clear_cache()
+cache.clear()
 ```
 
-#### Cache Key Generation
+**Cache key**: method + URL + query `params` + request headers except
+`Authorization`, `X-API-Key`, `User-Agent`, `Cookie` (so all API keys share the
+cache) + body for POST/PUT/PATCH.
 
-Cache keys are generated based on:
-- HTTP method
-- URL
-- Relevant headers (excluding Authorization, cookies)
-- Request body (for POST/PUT/PATCH)
+**Not cached**: non-2xx responses, responses with `Set-Cookie`,
+`Cache-Control: no-store` / `private`, `text/event-stream` and
+`multipart/x-mixed-replace` content.
 
-This ensures different requests are cached separately.
-
-#### Methods
-
-```python
-cache.clear_cache()          # Clear all cached responses
-stats = cache.get_stats()    # Get cache statistics
-```
-
-**Statistics returned**:
-- `cache_size`: Number of cached responses
-- `max_cache_size`: Maximum cache capacity
-- `hits`: Number of cache hits
-- `misses`: Number of cache misses
-- `hit_rate`: Percentage of requests served from cache
-- `total_requests`: Total requests processed
-
----
+A cache hit returns a regular `requests.Response` / `httpx.Response` (sync) or a
+small object with `status`, `status_code`, `headers`, `read()`, `text()`,
+`json()` (async).
 
 ### LoggingMiddleware
 
-Logs all requests and responses with sensitive data masking.
-
-#### Features
-
-- **Sensitive Data Masking**: Automatically masks Authorization, API keys, cookies
-- **Configurable Verbosity**: Control detail level
-- **Response Time Logging**: Track request duration
-- **Color-Coded Output**: Easy visual parsing (via emojis)
-- **Traceback Support**: Full error tracebacks in DEBUG mode
-
-#### Usage
-
 ```python
-from apikeyrotator import APIKeyRotator
-from apikeyrotator.middleware import LoggingMiddleware
 import logging
+from apikeyrotator import APIKeyRotator, LoggingMiddleware
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-# Create logging middleware
-log_middleware = LoggingMiddleware(
-    verbose=True,              # Include detailed info
-    log_response_time=True,    # Log request duration
-    max_key_chars=4            # Show only first 4 chars of key
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 rotator = APIKeyRotator(
     api_keys=["key1", "key2"],
-    middlewares=[log_middleware]
+    middlewares=[LoggingMiddleware(
+        verbose=True,              # include key (masked) and attempt number
+        log_response_time=True,
+        max_key_chars=4,           # characters of the key shown in logs
+        max_logs_per_second=1000,  # drop messages above this rate
+    )],
 )
+rotator.get("https://api.example.com/data")
 
-# Make request - automatically logged
-response = rotator.get("https://api.example.com/data")
-
-# Example output:
 # 📤 GET https://api.example.com/data (key: key1****, attempt: 1)
 # 📥 ✅ 200 from https://api.example.com/data (key: key1****) (0.234s)
 ```
 
-#### Log Levels
+Log levels: `2xx` INFO ✅, `4xx` WARNING ⚠️, `5xx` ERROR ❌; errors are logged at
+ERROR with a traceback at DEBUG level. Headers `Authorization`, `X-API-Key`,
+`Cookie`, `Set-Cookie` are logged as `[REDACTED]` (headers are logged at DEBUG).
 
-The middleware uses different log levels based on response status:
-
-- **200-299**: INFO with ✅
-- **400-499**: WARNING with ⚠️
-- **500-599**: ERROR with ❌
-
-#### Sensitive Data Protection
-
-The following headers are automatically masked:
-- `Authorization`
-- `X-API-Key`
-- `Cookie`
-- `Set-Cookie`
-
-Example:
-```python
-# Original: {"Authorization": "Bearer secret_token_123"}
-# Logged:   {"Authorization": "[REDACTED]"}
-```
-
----
+The middleware logs to the `apikeyrotator.middleware.logging` logger (or the
+`logger=` you pass); configure logging in your application to see the output.
 
 ### RateLimitMiddleware
 
-Tracks rate limits and automatically pauses when limits are hit.
-
-#### Features
-
-- **Header Parsing**: Extracts rate limit info from response headers
-- **Automatic Pausing**: Waits until rate limit expires
-- **Multi-Key Tracking**: Tracks rate limits per API key
-- **429 Handling**: Automatically handles 429 Too Many Requests
-
-#### Usage
-
 ```python
-from apikeyrotator import APIKeyRotator
-from apikeyrotator.middleware import RateLimitMiddleware
+from apikeyrotator import APIKeyRotator, RateLimitMiddleware
 
-# Create rate limit middleware
 rate_limit = RateLimitMiddleware(
-    pause_on_limit=True,      # Automatically wait when rate limited
-    max_tracked_keys=1000     # Track up to 1000 keys
+    pause_on_limit=True,    # wait before using a key whose quota is used up
+    max_tracked_keys=1000,
+    max_wait=60,            # never wait longer than this per request
 )
+rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"], middlewares=[rate_limit])
 
-rotator = APIKeyRotator(
-    api_keys=["key1", "key2", "key3"],
-    middlewares=[rate_limit]
-)
-
-# Make requests - middleware handles rate limits automatically
-for i in range(10000):
-    response = rotator.get(f"https://api.example.com/data/{i}")
-    # If rate limited, middleware will automatically pause
-
-# View rate limit statistics
 stats = rate_limit.get_stats()
-print(f"Tracked keys: {stats['tracked_keys']}")
-print(f"Active limits: {stats['active_limits']}")
-
-# Clear rate limit records if needed
-rate_limit.clear_limits()
+print(stats["tracked_keys"], stats["active_limits"])
 ```
 
-#### Supported Headers
+It reads `X-RateLimit-Limit/Remaining/Reset` and the IETF `RateLimit-*` headers
+(reset as UNIX timestamp or seconds) from every response, and `Retry-After`
+(seconds or HTTP date) from `429` responses. Before an attempt, if the selected
+key has `remaining == 0` and its reset time is in the future, it waits until the
+reset (at most `max_wait`).
 
-The middleware recognizes these standard headers:
-
-- `X-RateLimit-Limit`: Total request limit
-- `X-RateLimit-Remaining`: Remaining requests
-- `X-RateLimit-Reset`: Unix timestamp when limit resets
-- `Retry-After`: Seconds to wait or HTTP date
-
-#### Behavior on Rate Limit
-
-When a key is rate limited:
-
-1. Extract rate limit reset time from headers
-2. Store reset time for the key
-3. Before next request with that key, check if reset time has passed
-4. If not passed and `pause_on_limit=True`, wait until reset
-5. If not passed and `pause_on_limit=False`, proceed (likely to fail again)
+**Do you need it?** The rotator already parks keys that answer `429` or report
+`X-RateLimit-Remaining: 0` and continues with other keys, and `key_rate_limit=`
+enforces a quota client-side ([Resilience](RESILIENCE.md)). The middleware is
+useful when you prefer *waiting* for a key - e.g. with a single key.
 
 ---
-
 
 ## Creating Custom Middleware
 
-### Basic Custom Middleware
+### Adding Headers
 
 ```python
-from apikeyrotator.middleware import RequestInfo, ResponseInfo, ErrorInfo
+import time
+import uuid
+from apikeyrotator import APIKeyRotator, RotatorMiddleware, RequestInfo
 
-class CustomHeaderMiddleware:
-    """Add custom headers to all requests."""
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        # Modify request before sending
-        request_info.headers["X-Custom-Header"] = "MyValue"
-        request_info.headers["X-Request-Timestamp"] = str(time.time())
+class RequestIdMiddleware(RotatorMiddleware):
+    """Adds a request id and a timestamp to every attempt."""
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+        request_info.headers["X-Request-ID"] = str(uuid.uuid4())
+        request_info.headers["X-Request-Timestamp"] = str(int(time.time()))
         return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        # Process response after receiving
-        print(f"Received {response_info.status_code} from {response_info.request_info.url}")
-        return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        # Handle errors
-        print(f"Error occurred: {error_info.exception}")
-        return False  # Don't handle, let it propagate
 
-# Usage
-custom = CustomHeaderMiddleware()
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[custom]
-)
+rotator = APIKeyRotator(api_keys=["key1"], middlewares=[RequestIdMiddleware()])
 ```
 
-### Response Validation Middleware
+### Response Validation
+
+An exception raised in `after_request` propagates to the caller of
+`rotator.get()` - a convenient way to reject malformed responses:
 
 ```python
-class ResponseValidationMiddleware:
-    """Validate response data structure."""
-    
-    def __init__(self, required_fields: List[str]):
+import json
+from apikeyrotator import APIKeyRotator, RotatorMiddleware, ResponseInfo
+
+class InvalidResponseError(Exception):
+    pass
+
+class RequiredFieldsMiddleware(RotatorMiddleware):
+    def __init__(self, required_fields: list[str]):
         self.required_fields = required_fields
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        # Parse JSON response
-        try:
-            if response_info.content:
+
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
+        if response_info.status_code == 200 and response_info.content:
+            try:
                 data = json.loads(response_info.content)
-                
-                # Validate required fields
-                missing = [f for f in self.required_fields if f not in data]
-                if missing:
-                    raise ValueError(f"Missing required fields: {missing}")
-        except json.JSONDecodeError:
-            pass  # Not JSON, skip validation
-        
+            except ValueError:
+                return response_info   # not JSON
+            missing = [f for f in self.required_fields if f not in data]
+            if missing:
+                raise InvalidResponseError(f"Missing fields: {missing}")
         return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        return False
 
-# Usage
-validator = ResponseValidationMiddleware(
-    required_fields=["id", "name", "created_at"]
-)
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[validator]
-)
+rotator = APIKeyRotator(api_keys=["key1"], middlewares=[RequiredFieldsMiddleware(["id", "name"])])
 ```
 
-### Metrics Collection Middleware
+### Metrics Collection
+
+`ResponseInfo.response_time` already holds the duration of the attempt:
 
 ```python
 from collections import defaultdict
-import time
+from apikeyrotator import APIKeyRotator, RotatorMiddleware, ResponseInfo, ErrorInfo
 
-class MetricsMiddleware:
-    """Collect detailed request metrics."""
-    
+class StatusCodeMetrics(RotatorMiddleware):
     def __init__(self):
-        self.metrics = defaultdict(lambda: {
-            'count': 0,
-            'total_time': 0.0,
-            'errors': 0,
-            'status_codes': defaultdict(int)
-        })
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        # Store start time
-        request_info.kwargs['_start_time'] = time.time()
-        return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        # Calculate duration
-        start_time = response_info.request_info.kwargs.get('_start_time', 0)
-        duration = time.time() - start_time
-        
-        # Update metrics
-        url = response_info.request_info.url
-        self.metrics[url]['count'] += 1
-        self.metrics[url]['total_time'] += duration
-        self.metrics[url]['status_codes'][response_info.status_code] += 1
-        
+        self.status_codes = defaultdict(int)
+        self.total_time = 0.0
+        self.responses = 0
+        self.errors = 0
+
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
+        self.status_codes[response_info.status_code] += 1
+        self.total_time += response_info.response_time or 0.0
+        self.responses += 1
         return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        url = error_info.request_info.url
-        self.metrics[url]['errors'] += 1
+
+    def on_error_sync(self, error_info: ErrorInfo) -> bool:
+        self.errors += 1
         return False
-    
-    def get_metrics(self) -> Dict:
-        """Get collected metrics."""
-        return {
-            url: {
-                'count': stats['count'],
-                'avg_time': stats['total_time'] / stats['count'] if stats['count'] > 0 else 0,
-                'errors': stats['errors'],
-                'status_codes': dict(stats['status_codes'])
-            }
-            for url, stats in self.metrics.items()
-        }
 
-# Usage
-metrics = MetricsMiddleware()
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[metrics]
-)
+    def summary(self) -> dict:
+        avg = self.total_time / self.responses if self.responses else 0.0
+        return {"status_codes": dict(self.status_codes), "avg_time": avg, "errors": self.errors}
 
-# Make requests...
+metrics = StatusCodeMetrics()
+rotator = APIKeyRotator(api_keys=["key1"], middlewares=[metrics])
 for i in range(100):
     rotator.get(f"https://api.example.com/data/{i}")
-
-# View metrics
-for url, stats in metrics.get_metrics().items():
-    print(f"{url}: {stats['count']} requests, {stats['avg_time']:.3f}s avg")
+print(metrics.summary())
 ```
 
-### Authentication Middleware
+The rotator also has built-in metrics: `rotator.get_metrics()` and
+`rotator.get_key_statistics()`.
+
+### Request Signing / JWT per Key
+
+Per-key authentication is best done with `header_callback` - it receives the key
+chosen for the attempt:
 
 ```python
-import jwt
-from datetime import datetime, timedelta
+import time
+import jwt   # pip install pyjwt
+from apikeyrotator import APIKeyRotator
 
-class JWTAuthMiddleware:
-    """Automatically refresh JWT tokens."""
-    
-    def __init__(self, api_key: str, api_secret: str):
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.token = None
-        self.token_expiry = None
-    
-    def _generate_token(self) -> str:
-        """Generate new JWT token."""
-        payload = {
-            'api_key': self.api_key,
-            'exp': datetime.utcnow() + timedelta(hours=1)
-        }
-        return jwt.encode(payload, self.api_secret, algorithm='HS256')
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        # Check if token is expired or missing
-        if not self.token or datetime.utcnow() >= self.token_expiry:
-            self.token = self._generate_token()
-            self.token_expiry = datetime.utcnow() + timedelta(minutes=55)
-            print("Generated new JWT token")
-        
-        # Add token to request
-        request_info.headers["Authorization"] = f"Bearer {self.token}"
-        return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        # Check if token was rejected
-        if response_info.status_code == 401:
-            # Force token refresh on next request
-            self.token = None
-        return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        return False
+_tokens: dict[str, tuple[str, float]] = {}
 
-# Usage
-jwt_auth = JWTAuthMiddleware(
-    api_key="my_api_key",
-    api_secret="my_secret"
-)
+def jwt_headers(key: str, headers: dict | None) -> dict:
+    """Sign a short-lived JWT with the rotated secret; cache it per key."""
+    token, expires = _tokens.get(key, ("", 0.0))
+    if time.time() > expires - 60:
+        expires = time.time() + 3600
+        token = jwt.encode({"exp": int(expires)}, key, algorithm="HS256")
+        _tokens[key] = (token, expires)
+    return {"Authorization": f"Bearer {token}"}
 
-rotator = APIKeyRotator(
-    api_keys=["dummy"],  # Not used, JWT handles auth
-    middlewares=[jwt_auth]
-)
+rotator = APIKeyRotator(api_keys=["secret1", "secret2"], header_callback=jwt_headers)
 ```
+
+Remember that a `401`/`403` removes the key from rotation; for tokens that can
+simply expire, refresh them before they do (as above).
+
+### Async-only Work
+
+Override the coroutine hooks when the middleware must `await`:
+
+```python
+from apikeyrotator import AsyncAPIKeyRotator, RotatorMiddleware, RequestInfo
+
+class AsyncTokenMiddleware(RotatorMiddleware):
+    def __init__(self, token_source):
+        self.token_source = token_source   # object with: async def get_token() -> str
+
+    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
+        request_info.headers["X-Session-Token"] = await self.token_source.get_token()
+        return request_info
+```
+
+Such a middleware only works with `AsyncAPIKeyRotator`.
 
 ---
 
-## Middleware Best Practices
+## Best Practices
 
-### 1. Order Matters
-
-Middleware executes in the order specified. Choose the right order:
-
-```python
-# Good: Cache checks first, then logging
-middlewares = [cache, logger, rate_limit]
-
-# Bad: Logging before cache means cache hits are logged
-middlewares = [logger, cache, rate_limit]
-
-# Good for security: Validate first, then process
-middlewares = [validator, processor, logger]
-```
-
-### 2. Keep Middleware Focused
-
-Each middleware should have a single responsibility:
-
-```python
-# Good: Separate concerns
-class CachingMiddleware:
-    # Only handles caching
-
-class LoggingMiddleware:
-    # Only handles logging
-
-# Bad: Mixed concerns
-class CachingAndLoggingMiddleware:
-    # Handles both - harder to test and reuse
-```
-
-### 3. Handle Errors Gracefully
-
-Always use try-except in middleware:
-
-```python
-class SafeMiddleware:
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        try:
-            # Risky operation
-            request_info.headers["X-Token"] = self.get_token()
-        except Exception as e:
-            # Log error but don't break the request
-            print(f"Middleware error: {e}")
-        return request_info
-```
-
-### 4. Make Middleware Configurable
-
-Allow customization through constructor parameters:
-
-```python
-class ConfigurableMiddleware:
-    def __init__(
-        self,
-        enabled: bool = True,
-        timeout: int = 300,
-        max_size: int = 1000
-    ):
-        self.enabled = enabled
-        self.timeout = timeout
-        self.max_size = max_size
-```
-
-### 5. Provide Statistics and Introspection
-
-```python
-class WellDesignedMiddleware:
-    def get_stats(self) -> Dict:
-        """Return current statistics."""
-        return {
-            'requests_processed': self.count,
-            'cache_hits': self.hits
-        }
-    
-    def reset(self):
-        """Reset internal state."""
-        self.count = 0
-        self.hits = 0
-```
+1. **Order matters.** Put `CachingMiddleware` first so a cache hit skips the others;
+   put logging after it if cache hits should not be logged as requests.
+2. **One responsibility per middleware** - easier to test and reuse.
+3. **Don't let optional work break requests.** Wrap non-essential logic in
+   `try/except` inside `before_request` / `after_request` (exceptions there reach
+   the caller; exceptions in `on_error` are ignored).
+4. **Don't put your own keys into `request_info.kwargs`** - they are passed to the
+   HTTP client. Keep per-attempt state keyed by the `RequestInfo` object instead
+   (see below).
+5. **Bound your memory** - any per-URL or per-key storage needs a size limit.
+6. **Provide `get_stats()`** for introspection, like the built-ins.
 
 ---
 
@@ -635,109 +348,85 @@ class WellDesignedMiddleware:
 
 ### Conditional Middleware
 
-Middleware that only runs for certain requests:
-
 ```python
-class ConditionalMiddleware:
-    """Only process requests to specific domains."""
-    
-    def __init__(self, allowed_domains: List[str]):
-        self.allowed_domains = allowed_domains
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        from urllib.parse import urlparse
-        domain = urlparse(request_info.url).netloc
-        
-        if domain in self.allowed_domains:
-            # Apply middleware logic
-            request_info.headers["X-Special-Header"] = "Value"
-        
-        return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        return False
+from urllib.parse import urlsplit
+from apikeyrotator import RotatorMiddleware, RequestInfo
 
-# Usage
-conditional = ConditionalMiddleware(
-    allowed_domains=["api.example.com", "api.other.com"]
-)
+class DomainHeaderMiddleware(RotatorMiddleware):
+    """Adds a header only for selected domains."""
+
+    def __init__(self, domains: set[str], header: str, value: str):
+        self.domains, self.header, self.value = domains, header, value
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+        if urlsplit(request_info.url).hostname in self.domains:
+            request_info.headers[self.header] = self.value
+        return request_info
 ```
 
 ### Composite Middleware
 
-Combine multiple middleware into one:
-
 ```python
-class CompositeMiddleware:
-    """Combine multiple middleware."""
-    
-    def __init__(self, middlewares: List):
+from apikeyrotator import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
+
+class CompositeMiddleware(RotatorMiddleware):
+    """Groups several middlewares into one (same order semantics as the rotator)."""
+
+    def __init__(self, middlewares: list[RotatorMiddleware]):
         self.middlewares = middlewares
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo | ResponseInfo:
         for middleware in self.middlewares:
-            request_info = await middleware.before_request(request_info)
+            result = middleware.before_request_sync(request_info)
+            if isinstance(result, ResponseInfo):
+                return result          # short-circuit (e.g. cache hit)
+            request_info = result
         return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        for middleware in reversed(self.middlewares):
-            response_info = await middleware.after_request(response_info)
-        return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
+
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
         for middleware in self.middlewares:
-            if await middleware.on_error(error_info):
-                return True
-        return False
+            response_info = middleware.after_request_sync(response_info)
+        return response_info
 
-# Usage
-composite = CompositeMiddleware([
-    CachingMiddleware(),
-    LoggingMiddleware(),
-    RateLimitMiddleware()
-])
-
-rotator = APIKeyRotator(
-    api_keys=["key1"],
-    middlewares=[composite]
-)
+    def on_error_sync(self, error_info: ErrorInfo) -> bool:
+        return any([m.on_error_sync(error_info) for m in self.middlewares])
 ```
 
-### State Sharing Between Middleware
+### Per-Attempt State
+
+`after_request` and `on_error` receive the same `RequestInfo` object that
+`before_request` saw, so it can key per-attempt state:
 
 ```python
-class SharedStateMiddleware:
-    """Share state between middleware instances."""
-    
-    _shared_state = {}
-    
-    async def before_request(self, request_info: RequestInfo) -> RequestInfo:
-        # Store request ID in shared state
-        request_id = str(uuid.uuid4())
-        self._shared_state[request_id] = {
-            'start_time': time.time(),
-            'url': request_info.url
-        }
-        request_info.kwargs['_request_id'] = request_id
+import threading
+import time
+from apikeyrotator import RotatorMiddleware, RequestInfo, ResponseInfo, ErrorInfo
+
+class SlowRequestMiddleware(RotatorMiddleware):
+    """Reports attempts slower than a threshold (wall clock incl. other middlewares)."""
+
+    def __init__(self, threshold: float = 1.0):
+        self.threshold = threshold
+        self._started: dict[int, float] = {}
+        self._lock = threading.Lock()
+
+    def before_request_sync(self, request_info: RequestInfo) -> RequestInfo:
+        with self._lock:
+            self._started[id(request_info)] = time.monotonic()
         return request_info
-    
-    async def after_request(self, response_info: ResponseInfo) -> ResponseInfo:
-        # Retrieve and use shared state
-        request_id = response_info.request_info.kwargs.get('_request_id')
-        if request_id in self._shared_state:
-            state = self._shared_state.pop(request_id)
-            duration = time.time() - state['start_time']
-            print(f"Request {request_id} took {duration:.3f}s")
+
+    def _finish(self, request_info: RequestInfo) -> None:
+        with self._lock:
+            started = self._started.pop(id(request_info), None)
+        if started is not None and time.monotonic() - started > self.threshold:
+            print(f"Slow: {request_info.method} {request_info.url}")
+
+    def after_request_sync(self, response_info: ResponseInfo) -> ResponseInfo:
+        self._finish(response_info.request_info)
         return response_info
-    
-    async def on_error(self, error_info: ErrorInfo) -> bool:
-        # Cleanup shared state on error
-        request_id = error_info.request_info.kwargs.get('_request_id')
-        if request_id in self._shared_state:
-            del self._shared_state[request_id]
+
+    def on_error_sync(self, error_info: ErrorInfo) -> bool:
+        self._finish(error_info.request_info)
         return False
 ```
 
@@ -745,77 +434,22 @@ class SharedStateMiddleware:
 
 ## Performance Considerations
 
-### 1. Minimize Overhead
-
-Keep middleware logic lightweight:
-
-```python
-# Good: Simple and fast
-async def before_request(self, request_info):
-    request_info.headers["X-Fast"] = "true"
-    return request_info
-
-# Bad: Slow and blocking
-async def before_request(self, request_info):
-    # Don't do expensive operations here
-    result = self.expensive_database_query()
-    request_info.headers["X-Data"] = result
-    return request_info
-```
-
-### 2. Use Async Properly
-
-All middleware methods are async - use `await` for I/O operations:
-
-```python
-async def before_request(self, request_info):
-    # Good: Non-blocking
-    await asyncio.sleep(0.1)
-    
-    # Bad: Blocks event loop
-    time.sleep(0.1)
-    
-    return request_info
-```
-
-### 3. Limit Memory Usage
-
-Implement cleanup for long-running middleware:
-
-```python
-class MemoryEfficientMiddleware:
-    def __init__(self, max_cache_size: int = 1000):
-        self.cache = OrderedDict()
-        self.max_cache_size = max_cache_size
-    
-    async def after_response(self, response_info):
-        # Evict old entries
-        if len(self.cache) >= self.max_cache_size:
-            self.cache.popitem(last=False)
-        
-        # Add new entry
-        self.cache[response_info.request_info.url] = response_info
-        return response_info
-```
-
-### 4. Profile Middleware Performance
-
-```python
-from apikeyrotator.utils import measure_time_async
-
-class ProfiledMiddleware:
-    @measure_time_async
-    async def before_request(self, request_info):
-        # This will log execution time
-        # Do middleware work
-        return request_info
-```
+1. **Keep hooks cheap** - they run for every attempt. The built-in stack
+   (logging + rate limit) adds roughly 17 µs per request; see
+   [benchmarks](../benchmarks/README.md).
+2. **Avoid blocking in async hooks** - use `await asyncio.sleep()`, not
+   `time.sleep()`, and async clients for I/O.
+3. **With any middleware installed, async responses are read into memory** so that
+   `ResponseInfo.content` is available. For large downloads without middleware
+   needs, use a rotator without middlewares (or `stream=True` with the sync rotator,
+   where `content` is `None`).
+4. **Profile** with `apikeyrotator.utils.measure_time` / `measure_time_async`
+   (log durations at DEBUG level).
 
 ---
 
 ## Next Steps
 
-- See [Examples](EXAMPLES.md) for practical middleware usage
-- Check [API Reference](API_REFERENCE.md) for complete middleware API
-- Read [Advanced Usage](ADVANCED_USAGE.md) for more patterns
-- Review [Getting Started](GETTING_STARTED.md) for basics
+- [Examples](EXAMPLES.md) - practical middleware usage
+- [API Reference](API_REFERENCE.md#middleware) - complete middleware API
+- [Advanced Usage](ADVANCED_USAGE.md) - strategies, providers, metrics

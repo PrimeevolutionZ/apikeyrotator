@@ -1,598 +1,238 @@
 # Contributing to APIKeyRotator
 
-Thank you for your interest in contributing to APIKeyRotator! 🎉 We welcome contributions from everyone, whether you're fixing a bug, adding a feature, or improving documentation.
+Thank you for your interest in contributing! 🎉 Bug fixes, features, tests and
+documentation improvements are all welcome.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
 - [How to Contribute](#how-to-contribute)
 - [Pull Request Process](#pull-request-process)
 - [Coding Standards](#coding-standards)
 - [Testing Guidelines](#testing-guidelines)
+- [Performance Changes](#performance-changes)
 - [Documentation](#documentation)
 - [Release Process](#release-process)
 
-## 🤝 Code of Conduct
-
-By participating in this project, you agree to abide by our Code of Conduct:
+## Code of Conduct
 
 - Be respectful and inclusive
 - Welcome newcomers and help them get started
 - Focus on what is best for the community
-- Show empathy towards other community members
 - Accept constructive criticism gracefully
 
-## 🚀 Getting Started
+## Development Setup
 
-### Prerequisites
-
-- Python 3.12 or higher
-- Git
-- GitHub account
-- Familiarity with Python and async programming
-
-### Finding Ways to Contribute
-
-1. **Browse Issues**: Check [open issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues) labeled:
-   - `good first issue` - Perfect for newcomers
-   - `help wanted` - Community help needed
-   - `bug` - Bug fixes needed
-   - `enhancement` - New features or improvements
-
-2. **Documentation**: Help improve docs, examples, or tutorials
-
-3. **Testing**: Add test coverage or report bugs
-
-4. **Features**: Propose new features via GitHub Discussions
-
-## 🛠️ Development Setup
-
-### 1. Fork and Clone
+Prerequisites: **Python 3.12+**, Git, a GitHub account.
 
 ```bash
-# Fork the repository on GitHub, then clone your fork
+# Fork on GitHub, then:
 git clone https://github.com/YOUR_USERNAME/apikeyrotator.git
 cd apikeyrotator
-
-# Add upstream remote
 git remote add upstream https://github.com/PrimeevolutionZ/apikeyrotator.git
+
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+pip install -e ".[dev,test]"       # library + pytest, ruff, mypy, httpx, fakeredis...
+
+pytest                             # ~2 seconds, no network needed
+ruff check .
 ```
 
-### 2. Create Virtual Environment
+## How to Contribute
 
-```bash
-# Create virtual environment
-python -m venv venv
+- **Issues** labelled `good first issue`, `help wanted`, `bug`, `enhancement`:
+  [open issues](https://github.com/PrimeevolutionZ/apikeyrotator/issues).
+- **Features**: open a GitHub Discussion or an issue first for API changes.
+- **Security issues**: do not open a public issue - see [SECURITY.md](SECURITY.md).
 
-# Activate it
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
-```
+### Bug Report Template
 
-### 3. Install Dependencies
-
-```bash
-# Install in development mode with all dependencies
-pip install -e ".[dev,test]"
-
-# Or install manually
-pip install -e .
-pip install requests aiohttp python-dotenv
-pip install pytest pytest-asyncio requests-mock aioresponses
-pip install black flake8 mypy isort
-```
-
-### 4. Verify Installation
-
-```bash
-# Run tests to verify everything works
-pytest
-
-# Run a quick check
-python -c "from apikeyrotator import APIKeyRotator; print('✅ Installation successful!')"
-```
-
-## 🎯 How to Contribute
-
-### Reporting Bugs
-
-Before creating a bug report:
-1. Check if the bug has already been reported
-2. Verify it's not a configuration issue
-3. Collect relevant information
-
-**Bug Report Template:**
-
-```markdown
+~~~markdown
 **Describe the bug**
-A clear description of what the bug is.
+What happened and what you expected.
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Initialize rotator with '...'
-2. Call method '...'
-3. See error
-
-**Expected behavior**
-What you expected to happen.
-
-**Actual behavior**
-What actually happened.
-
-**Environment:**
-- OS: [e.g., Windows 11, Ubuntu 22.04]
-- Python version: [e.g., 3.12.3]
-- APIKeyRotator version: [e.g., 0.4.1]
-- Dependencies: [e.g., requests 2.28.0]
-
-**Code snippet:**
+**To reproduce**
 ```python
-# Minimal code to reproduce the issue
 from apikeyrotator import APIKeyRotator
-rotator = APIKeyRotator(api_keys=["key1"])
-# ...
+rotator = APIKeyRotator(api_keys=["key1"], load_env_file=False)
+...
 ```
 
-**Error message:**
-```
-Full error traceback here
-```
+**Environment**
+- OS, Python version (e.g. 3.12.3)
+- apikeyrotator version (`python -c "import apikeyrotator; print(apikeyrotator.__version__)"`)
+- HTTP backend (requests / aiohttp / httpx) and its version
 
-**Additional context**
-Any other relevant information.
-```
+**Traceback / logs**
+Run with `logging.basicConfig(level=logging.DEBUG)`; keys are masked in logs,
+but double-check before pasting.
+~~~
 
-### Suggesting Features
+### Feature Request Template
 
-Feature suggestions are welcome! Please use GitHub Discussions for:
-- New features
-- API changes
-- Architectural improvements
+~~~markdown
+**Problem**
+What problem does this solve?
 
-**Feature Request Template:**
-
-```markdown
-**Problem Statement**
-What problem does this feature solve?
-
-**Proposed Solution**
-How should the feature work?
-
-**Example Usage**
-```python
-# Show how the feature would be used
-rotator = APIKeyRotator(new_feature=True)
+**Proposed API**
+```python signature
+rotator = APIKeyRotator(api_keys=[...], new_option=True)
 ```
 
-**Alternatives Considered**
-What other solutions did you consider?
+**Alternatives considered**
+~~~
 
-**Additional Context**
-Any other relevant information.
-```
+## Pull Request Process
 
-## 📝 Pull Request Process
+1. **Branch** from an up-to-date `master`:
 
-### 1. Create a Branch
+   ```bash
+   git checkout master && git pull upstream master
+   git checkout -b feature/amazing-feature   # or fix/..., docs/..., test/..., refactor/..., perf/...
+   ```
 
-```bash
-# Update your fork
-git checkout master
-git pull upstream master
+2. **Change** the code, add tests, update docs and `CHANGELOG.md`.
 
-# Create a feature branch
-git checkout -b feature/amazing-feature
-# or
-git checkout -b fix/bug-description
-```
+3. **Check locally** - the same checks run in CI (`.github/workflows/ci.yml`):
 
-### Branch Naming Convention
+   ```bash
+   ruff check .
+   pytest --cov=apikeyrotator
+   python benchmarks/bench_core.py --quick          # benchmark still runs
+   python scripts/check_docs.py                     # doc examples match the API
+   ```
 
-- `feature/` - New features
-- `fix/` - Bug fixes
-- `docs/` - Documentation updates
-- `test/` - Test improvements
-- `refactor/` - Code refactoring
+4. **Commit** with [Conventional Commits](https://www.conventionalcommits.org/) style:
 
-### 2. Make Your Changes
+   ```text
+   feat: add failover rotation strategy
+   fix: release half-open circuit probe when an attempt dies
+   docs: update middleware guide
+   perf: single-pass rate-limit header parsing
+   ```
 
-- Write clean, readable code
-- Follow the coding standards (see below)
-- Add tests for new functionality
-- Update documentation as needed
-- Keep commits focused and atomic
+5. **Push and open a PR** describing *what* and *why*, how it was tested, and linking
+   issues (`Closes #123`). CI runs lint, tests on Python 3.12/3.13 and a benchmark of
+   your branch against `master`.
 
-### 3. Test Your Changes
+6. **Review**: address comments; keep the branch up to date with
+   `git fetch upstream && git merge upstream/master` (or rebase if you prefer).
 
-```bash
-# Run all tests
-pytest
+## Coding Standards
 
-# Run specific tests
-pytest tests/test_rotator.py
+- **Style**: `ruff check .` must pass (rules configured in `pyproject.toml`: pyflakes,
+  import sorting, pyupgrade for 3.12+, bugbear). Line length 100.
+- **Type hints** on public functions, modern syntax:
 
-# Run with coverage
-pytest --cov=apikeyrotator --cov-report=html
+  ```python
+  def get_keys(api_keys: list[str] | None = None) -> list[str]:
+      """Get API keys from various sources."""
+  ```
 
-# Run type checking
-mypy apikeyrotator
+- **Docstrings**: Google style (`Args:`, `Returns:`, `Raises:`).
+- **Errors**: raise specific exceptions (subclasses of `APIKeyError` for library
+  errors); never swallow exceptions silently.
+- **Logging**: `logger = logging.getLogger(__name__)`; never add handlers or set
+  levels in library code; never log raw API keys (mask with the first 4 characters).
+  Use `%`-style arguments in hot paths (`logger.debug("key %s", masked)`).
+- **Thread safety**: rotators are shared between threads; guard shared mutable state.
+- **Optional dependencies** (httpx, redis, boto3, google-cloud) are imported lazily.
 
-# Run linting
-flake8 apikeyrotator
-black --check apikeyrotator
-isort --check apikeyrotator
-```
+## Testing Guidelines
 
-### 4. Commit Your Changes
-
-Write clear, descriptive commit messages:
-
-```bash
-# Good commit messages
-git commit -m "Add proxy rotation support to APIKeyRotator"
-git commit -m "Fix rate limit detection for custom error codes"
-git commit -m "Update documentation for async usage"
-
-# Bad commit messages (avoid these)
-git commit -m "Fixed bug"
-git commit -m "Update"
-git commit -m "Changes"
-```
-
-**Commit Message Format:**
-
-```
-<type>: <short summary>
-
-<detailed description (optional)>
-
-<footer (optional)>
-```
-
-Types:
-- `feat:` - New feature
-- `fix:` - Bug fix
-- `docs:` - Documentation changes
-- `test:` - Test changes
-- `refactor:` - Code refactoring
-- `perf:` - Performance improvements
-- `chore:` - Maintenance tasks
-
-### 5. Push and Create PR
-
-```bash
-# Push to your fork
-git push origin feature/amazing-feature
-
-# Create Pull Request on GitHub
-```
-
-**Pull Request Template:**
-
-```markdown
-## Description
-Brief description of changes.
-
-## Type of Change
-- [ ] Bug fix (non-breaking change fixing an issue)
-- [ ] New feature (non-breaking change adding functionality)
-- [ ] Breaking change (fix or feature causing existing functionality to change)
-- [ ] Documentation update
-
-## How Has This Been Tested?
-Describe the tests you ran.
-
-## Checklist
-- [ ] Code follows style guidelines
-- [ ] Self-review completed
-- [ ] Comments added for complex code
-- [ ] Documentation updated
-- [ ] Tests added/updated
-- [ ] All tests pass
-- [ ] No new warnings
-
-## Related Issues
-Closes #123
-Relates to #456
-```
-
-### 6. Code Review
-
-- Be responsive to feedback
-- Make requested changes promptly
-- Keep discussions professional and constructive
-- Update your PR branch if needed:
-
-```bash
-# Update from upstream master
-git checkout master
-git pull upstream master
-git checkout feature/amazing-feature
-git rebase master
-git push --force-with-lease origin feature/amazing-feature
-```
-
-## 📐 Coding Standards
-
-### Python Style
-
-We follow [PEP 8](https://pep8.org/) with some modifications:
+- Tests live in `tests/`, named `test_<topic>.py`; no real network access.
+- Sync requests: patch `requests.Session.request` or use the `requests_mock` fixture.
+- Async requests: patch `aiohttp.ClientSession.request` or use `aioresponses`.
+- httpx backend: `http_client_kwargs={"transport": httpx.MockTransport(handler)}`.
+- Time-dependent logic (backoff, rate limits, circuit breaker, deadlines): use the
+  `virtual_clock` fixture from `tests/conftest.py` - sleeps are instant, the clock advances.
+- Redis: the `fakeredis` package (`redis_client` fixture in `tests/test_features.py`).
 
 ```python
-# Use Black for formatting (line length: 88)
-black apikeyrotator
+from unittest.mock import Mock, patch
+from apikeyrotator import APIKeyRotator
 
-# Sort imports with isort
-isort apikeyrotator
-
-# Check with flake8
-flake8 apikeyrotator
+def test_switches_key_on_429(virtual_clock):
+    rotator = APIKeyRotator(api_keys=["k1", "k2"], load_env_file=False)
+    with patch("requests.Session.request") as request:
+        request.side_effect = [
+            Mock(status_code=429, headers={"Retry-After": "30"}, content=b""),
+            Mock(status_code=200, headers={}, content=b"{}"),
+        ]
+        assert rotator.get("https://api.example.com").status_code == 200
+    assert virtual_clock.sleeps == []   # switched immediately, no waiting
 ```
-
-### Code Quality
-
-- **Type Hints**: Use type hints for all functions
-
-```python
-from typing import List, Optional, Dict
-
-def get_keys(api_keys: Optional[List[str]] = None) -> List[str]:
-    """Get API keys from various sources."""
-    pass
-```
-
-- **Docstrings**: Use Google-style docstrings
-
-```python
-def example_function(param1: str, param2: int) -> bool:
-    """
-    Brief description of what the function does.
-    
-    Args:
-        param1: Description of param1
-        param2: Description of param2
-    
-    Returns:
-        Description of return value
-    
-    Raises:
-        ValueError: When param1 is invalid
-    
-    Example:
-        >>> example_function("test", 42)
-        True
-    """
-    pass
-```
-
-- **Error Handling**: Use specific exceptions
-
-```python
-# ✅ Good
-try:
-    result = risky_operation()
-except ValueError as e:
-    logger.error(f"Invalid value: {e}")
-    raise
-except KeyError as e:
-    logger.error(f"Missing key: {e}")
-    raise CustomError("Operation failed") from e
-
-# ❌ Bad
-try:
-    result = risky_operation()
-except:
-    pass
-```
-
-- **Logging**: Use appropriate log levels
-
-```python
-import logging
-
-logger = logging.getLogger(__name__)
-
-logger.debug("Detailed information for debugging")
-logger.info("General information")
-logger.warning("Warning message")
-logger.error("Error message")
-logger.critical("Critical error")
-```
-
-## 🧪 Testing Guidelines
-
-### Writing Tests
-
-- Place tests in the `tests/` directory
-- Test file names: `test_<module_name>.py`
-- Test function names: `test_<functionality>`
 
 ```python
 import pytest
-from apikeyrotator import APIKeyRotator
+from aioresponses import aioresponses
+from apikeyrotator import AsyncAPIKeyRotator
 
-def test_initialization_with_keys():
-    """Test that rotator initializes with provided keys."""
-    rotator = APIKeyRotator(api_keys=["key1", "key2"])
-    assert len(rotator.keys) == 2
-    assert "key1" in rotator.keys
-
-def test_get_request_success(requests_mock):
-    """Test successful GET request."""
-    requests_mock.get("http://example.com", json={"status": "ok"})
-    rotator = APIKeyRotator(api_keys=["key1"])
-    response = rotator.get("http://example.com")
-    assert response.status_code == 200
-```
-
-### Test Categories
-
-1. **Unit Tests**: Test individual functions/methods
-2. **Integration Tests**: Test component interactions
-3. **Async Tests**: Test async functionality
-
-```python
 @pytest.mark.asyncio
-async def test_async_get_request():
-    """Test async GET request."""
-    async with AsyncAPIKeyRotator(api_keys=["key1"]) as rotator:
-        response = await rotator.get("http://example.com")
-        assert response.status == 200
+async def test_async_get():
+    with aioresponses() as mocked:
+        mocked.get("https://api.example.com/data", payload={"ok": True})
+        async with AsyncAPIKeyRotator(api_keys=["k1"], load_env_file=False) as rotator:
+            response = await rotator.get("https://api.example.com/data")
+            assert await response.json() == {"ok": True}
 ```
-
-### Running Tests
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
+pytest                                  # all tests
+pytest tests/test_features.py -v        # one file
+pytest -k circuit                       # by name
 pytest --cov=apikeyrotator --cov-report=html
-
-# Run specific test file
-pytest tests/test_rotator.py
-
-# Run specific test
-pytest tests/test_rotator.py::test_initialization_with_keys
-
-# Run tests matching pattern
-pytest -k "test_async"
-
-# Run with verbose output
-pytest -v
-
-# Stop on first failure
-pytest -x
 ```
 
-## 📚 Documentation
+## Performance Changes
 
-### Documentation Types
-
-1. **Code Documentation**: Docstrings in code
-2. **API Documentation**: In `docs/API_REFERENCE.md`
-3. **User Guides**: In `docs/` directory
-4. **Examples**: In `docs/EXAMPLES.md`
-5. **README**: Project overview
-
-### Writing Documentation
-
-- Use clear, simple language
-- Include code examples
-- Keep examples short and focused
-- Test all code examples
-- Use proper Markdown formatting
-
-## 🚢 Release Process
-
-Releases are managed by maintainers. The process:
-
-1. **Version Bump**: Update version in `setup.py`
-2. **Changelog**: Update `CHANGELOG.md`
-3. **Testing**: Run full test suite
-4. **Tag**: Create git tag: `git tag v0.4.2`
-5. **Push**: Push tag: `git push origin v0.4.2`
-6. **Release**: Create GitHub release
-7. **PyPI**: Publish to PyPI
-
-### Version Numbering
-
-We follow [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: Incompatible API changes
-- **MINOR**: New features (backward compatible)
-- **PATCH**: Bug fixes (backward compatible)
-
-Example: `0.4.1` → `0.5.0` (new feature) or `0.4.2` (bug fix)
-
-## 🎯 Development Tips
-
-### Setting Up IDE
-
-**VS Code:**
-
-`.vscode/settings.json`:
-```json
-{
-  "python.linting.enabled": true,
-  "python.linting.pylintEnabled": false,
-  "python.linting.flake8Enabled": true,
-  "python.formatting.provider": "black",
-  "editor.formatOnSave": true,
-  "python.testing.pytestEnabled": true
-}
-```
-
-**PyCharm:**
-- Enable "Black" as code formatter
-- Enable pytest as test runner
-- Configure flake8 as external tool
-
-### Debugging
-
-```python
-# Add debug logging
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-# Use pdb for debugging
-import pdb; pdb.set_trace()
-
-# Or use built-in breakpoint()
-breakpoint()
-```
-
-### Common Tasks
+Changes to the core (`apikeyrotator/core`, `strategies`, `middleware`, `metrics`)
+should be checked with the benchmark:
 
 ```bash
-# Format code
-black apikeyrotator tests
-
-# Sort imports
-isort apikeyrotator tests
-
-# Run linting
-flake8 apikeyrotator
-
-# Type checking
-mypy apikeyrotator
-
-# Run tests with coverage
-pytest --cov=apikeyrotator --cov-report=html
-
-# Build documentation
-# (if we add Sphinx later)
-cd docs && make html
+git stash && python benchmarks/bench_core.py --save /tmp/before.json && git stash pop
+python benchmarks/bench_core.py --compare /tmp/before.json --threshold 10
 ```
 
-## 🏆 Recognition
+The PR benchmark job fails on regressions of machine-independent metrics (upstream
+calls, waiting time, success rate, memory). See [benchmarks/README.md](benchmarks/README.md).
 
-Contributors are recognized in:
-- Project README
-- Release notes
-- Contributors page
+## Documentation
 
-Significant contributors may be invited to join the maintenance team.
+- User docs live in `docs/`, the API reference in `docs/API_REFERENCE.md`.
+- Every Python example must run against the current API. `scripts/check_docs.py`
+  verifies imports, parameters, methods and links in all Markdown files (also in CI).
+  Fence non-runnable signatures as ` ```python signature `.
+- Keep examples short, use `load_env_file=False` in tests, and never put real keys in docs.
 
-## 📞 Getting Help
+## Release Process
 
-- **Questions**: Use [GitHub Discussions](https://github.com/PrimeevolutionZ/apikeyrotator/discussions)
-- **Chat**: Join our community (link TBD)
+Releases are made by maintainers:
 
-## 📜 License
+1. Bump the version in `pyproject.toml` **and** `apikeyrotator/__init__.py` (`__version__`).
+2. Update `CHANGELOG.md` (move items under the new version, note breaking changes).
+3. Make sure CI is green on `master`.
+4. Tag and push: `git tag v0.8.0 && git push origin v0.8.0`.
+5. Create a GitHub release and publish to PyPI (`python -m build && twine upload dist/*`).
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+Versions follow [Semantic Versioning](https://semver.org/). Before 1.0, minor versions
+(`0.7 → 0.8`) may contain breaking changes; they are listed in the changelog.
+
+## Getting Help
+
+Ask in [GitHub Discussions](https://github.com/PrimeevolutionZ/apikeyrotator/discussions).
+
+## License
+
+By contributing, you agree that your contributions are licensed under the MIT License.
 
 ---
 
 <div align="center">
 
 **Thank you for contributing to APIKeyRotator! 🎉**
-
-Made with ❤️ by [Eclips Team](https://github.com/PrimeevolutionZ)
 
 </div>

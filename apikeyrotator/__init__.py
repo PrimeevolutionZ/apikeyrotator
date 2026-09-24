@@ -73,6 +73,7 @@ from .state import InMemoryStateBackend, RedisStateBackend, StateBackend
 # Strategies
 from .strategies import (
     BaseRotationStrategy,
+    FailoverRotationStrategy,
     HealthBasedStrategy,
     KeyMetrics,
     LRURotationStrategy,
@@ -120,6 +121,7 @@ __all__ = [
     "WeightedRotationStrategy",
     "LRURotationStrategy",
     "HealthBasedStrategy",
+    "FailoverRotationStrategy",
     "KeyMetrics",
 
     # Providers

@@ -18,7 +18,6 @@ class RotationStrategy(Enum):
     LRU = "lru"
     FAILOVER = "failover"
     HEALTH_BASED = "health_based"
-    RATE_LIMIT_AWARE = "rate_limit_aware"
 
 
 # Lock striping: KeyMetrics instances share a small pool of locks instead of owning
