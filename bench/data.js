@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790256700460,
+  "lastUpdate": 1790256707173,
   "repoUrl": "https://github.com/PrimeevolutionZ/apikeyrotator",
   "entries": {
     "Throughput (higher is better)": [
@@ -1230,6 +1230,288 @@ window.BENCHMARK_DATA = {
           {
             "name": "e2e_async_local_http · p50_us",
             "value": 10824.9,
+            "unit": "µs",
+            "extra": "Real HTTP round-trips to a local server (async, 50 concurrent)"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "noreply@anthropic.com",
+            "name": "Claude",
+            "username": "claude"
+          },
+          "committer": {
+            "email": "noreply@anthropic.com",
+            "name": "Claude",
+            "username": "claude"
+          },
+          "distinct": false,
+          "id": "bfa53885e209c46d0237c9c40117a242fa4b0456",
+          "message": "ci: drop the 0.8.0 tag backfill, move actions to Node 24 versions\n\nGitHub rejects tags created by the workflow token on commits whose workflow\nfiles differ from the current ones, so 0.8.0 cannot be tagged from CI; the\none-off backfill workflow is removed. checkout@v5, setup-python@v6,\nupload/download-artifact@v5 replace the deprecated Node 20 versions.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01F6FRG9xUgZ3KxwroGa993w",
+          "timestamp": "2026-09-24T13:30:35Z",
+          "tree_id": "73c07d4c1a59d236b67156692c1b94f81454654c",
+          "url": "https://github.com/PrimeevolutionZ/apikeyrotator/commit/bfa53885e209c46d0237c9c40117a242fa4b0456"
+        },
+        "date": 1790256706498,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "overhead_sync_round_robin · p50_us",
+            "value": 10.77,
+            "unit": "µs",
+            "extra": "Sync request overhead, 10 keys, strategy=round_robin, stub transport"
+          },
+          {
+            "name": "overhead_sync_random · p50_us",
+            "value": 11.01,
+            "unit": "µs",
+            "extra": "Sync request overhead, 10 keys, strategy=random, stub transport"
+          },
+          {
+            "name": "overhead_sync_weighted · p50_us",
+            "value": 10.73,
+            "unit": "µs",
+            "extra": "Sync request overhead, 10 keys, strategy=weighted, stub transport"
+          },
+          {
+            "name": "overhead_sync_lru · p50_us",
+            "value": 12.14,
+            "unit": "µs",
+            "extra": "Sync request overhead, 10 keys, strategy=lru, stub transport"
+          },
+          {
+            "name": "overhead_sync_health_based · p50_us",
+            "value": 11.85,
+            "unit": "µs",
+            "extra": "Sync request overhead, 10 keys, strategy=health_based, stub transport"
+          },
+          {
+            "name": "overhead_sync_middlewares · p50_us",
+            "value": 28.11,
+            "unit": "µs",
+            "extra": "Sync overhead with Logging+RateLimit middlewares (all misses)"
+          },
+          {
+            "name": "overhead_sync_all_features · p50_us",
+            "value": 15.23,
+            "unit": "µs",
+            "extra": "Sync overhead with circuit breaker, key token bucket and request deadline enabled"
+          },
+          {
+            "name": "overhead_sync_cache_hits · p50_us",
+            "value": 14.46,
+            "unit": "µs",
+            "extra": "Sync requests served by CachingMiddleware (same URL)"
+          },
+          {
+            "name": "overhead_sync_cache_hits · upstream_calls_per_req",
+            "value": 0.0002,
+            "unit": "calls/req",
+            "extra": "Sync requests served by CachingMiddleware (same URL)"
+          },
+          {
+            "name": "overhead_async · p50_us",
+            "value": 14.38,
+            "unit": "µs",
+            "extra": "Async request overhead, 10 keys, sequential"
+          },
+          {
+            "name": "resilience_rate_limit_10pct · upstream_calls_per_req",
+            "value": 1.1024,
+            "unit": "calls/req",
+            "extra": "10 keys, 10% of responses are 429 (Retry-After: 1). Sleeps are simulated"
+          },
+          {
+            "name": "resilience_rate_limit_10pct · sleep_s_per_1k_req",
+            "value": 12.2,
+            "unit": "s per 1k req",
+            "extra": "10 keys, 10% of responses are 429 (Retry-After: 1). Sleeps are simulated"
+          },
+          {
+            "name": "resilience_rate_limit_hot_key · upstream_calls_per_req",
+            "value": 1.0002,
+            "unit": "calls/req",
+            "extra": "10 keys, one key always answers 429 (Retry-After: 30). Sleeps are simulated"
+          },
+          {
+            "name": "resilience_rate_limit_hot_key · sleep_s_per_1k_req",
+            "value": 0,
+            "unit": "s per 1k req",
+            "extra": "10 keys, one key always answers 429 (Retry-After: 30). Sleeps are simulated"
+          },
+          {
+            "name": "resilience_async_rate_limit_10pct · upstream_calls_per_req",
+            "value": 1.1024,
+            "unit": "calls/req",
+            "extra": "Async, 20 concurrent tasks, 10 keys, 10% 429s. Sleeps are simulated"
+          },
+          {
+            "name": "resilience_async_rate_limit_10pct · sleep_s_per_1k_req",
+            "value": 12.2,
+            "unit": "s per 1k req",
+            "extra": "Async, 20 concurrent tasks, 10 keys, 10% 429s. Sleeps are simulated"
+          },
+          {
+            "name": "resilience_server_errors_5pct · upstream_calls_per_req",
+            "value": 1.0514,
+            "unit": "calls/req",
+            "extra": "10 keys, 5% of responses are 503. Sleeps are simulated"
+          },
+          {
+            "name": "resilience_server_errors_5pct · sleep_s_per_1k_req",
+            "value": 57.446,
+            "unit": "s per 1k req",
+            "extra": "10 keys, 5% of responses are 503. Sleeps are simulated"
+          },
+          {
+            "name": "resilience_client_errors_5pct · upstream_calls_per_req",
+            "value": 1,
+            "unit": "calls/req",
+            "extra": "10 keys, 5% of requests hit a 404 endpoint (must not destroy the key pool)"
+          },
+          {
+            "name": "resilience_client_errors_5pct · sleep_s_per_1k_req",
+            "value": 0,
+            "unit": "s per 1k req",
+            "extra": "10 keys, 5% of requests hit a 404 endpoint (must not destroy the key pool)"
+          },
+          {
+            "name": "resilience_host_down · upstream_calls_per_req",
+            "value": 3,
+            "unit": "calls/req",
+            "extra": "Host answers 503 to everything, no circuit breaker (baseline for the next scenario)"
+          },
+          {
+            "name": "resilience_host_down · sleep_s_per_1k_req",
+            "value": 3153.706,
+            "unit": "s per 1k req",
+            "extra": "Host answers 503 to everything, no circuit breaker (baseline for the next scenario)"
+          },
+          {
+            "name": "resilience_host_down_breaker · upstream_calls_per_req",
+            "value": 0.01,
+            "unit": "calls/req",
+            "extra": "Host answers 503 to everything, circuit breaker on: fail fast instead of hammering it"
+          },
+          {
+            "name": "resilience_host_down_breaker · sleep_s_per_1k_req",
+            "value": 12.735,
+            "unit": "s per 1k req",
+            "extra": "Host answers 503 to everything, circuit breaker on: fail fast instead of hammering it"
+          },
+          {
+            "name": "resilience_quota_reactive · upstream_calls_per_req",
+            "value": 1.09,
+            "unit": "calls/req",
+            "extra": "10 keys x 10 req/min quota; rotator reacts to 429 only (header hints off)"
+          },
+          {
+            "name": "resilience_quota_reactive · sleep_s_per_1k_req",
+            "value": 541,
+            "unit": "s per 1k req",
+            "extra": "10 keys x 10 req/min quota; rotator reacts to 429 only (header hints off)"
+          },
+          {
+            "name": "resilience_quota_headers · upstream_calls_per_req",
+            "value": 1.009,
+            "unit": "calls/req",
+            "extra": "10 keys x 10 req/min quota; rotator skips keys at X-RateLimit-Remaining: 0"
+          },
+          {
+            "name": "resilience_quota_headers · sleep_s_per_1k_req",
+            "value": 540,
+            "unit": "s per 1k req",
+            "extra": "10 keys x 10 req/min quota; rotator skips keys at X-RateLimit-Remaining: 0"
+          },
+          {
+            "name": "resilience_quota_token_bucket · upstream_calls_per_req",
+            "value": 1,
+            "unit": "calls/req",
+            "extra": "10 keys x 10 req/min quota; client-side token bucket key_rate_limit=(10, 60)"
+          },
+          {
+            "name": "resilience_quota_token_bucket · sleep_s_per_1k_req",
+            "value": 540,
+            "unit": "s per 1k req",
+            "extra": "10 keys x 10 req/min quota; client-side token bucket key_rate_limit=(10, 60)"
+          },
+          {
+            "name": "resources_memory_per_key_round_robin · mem_bytes_per_key",
+            "value": 229.6,
+            "unit": "B/key",
+            "extra": "Memory retained per key: rotator with 10k keys, strategy=round_robin"
+          },
+          {
+            "name": "resources_memory_per_key_lru · mem_bytes_per_key",
+            "value": 229.6,
+            "unit": "B/key",
+            "extra": "Memory retained per key: rotator with 10k keys, strategy=lru"
+          },
+          {
+            "name": "resources_memory_per_key_health_based · mem_bytes_per_key",
+            "value": 229.6,
+            "unit": "B/key",
+            "extra": "Memory retained per key: rotator with 10k keys, strategy=health_based"
+          },
+          {
+            "name": "resources_steady_state_sync · mem_growth_bytes_per_1k_req",
+            "value": 0,
+            "unit": "B per 1k req",
+            "extra": "Sync, 10 keys: memory growth per 1k requests with unique URLs (leak check)"
+          },
+          {
+            "name": "resources_steady_state_sync · alloc_kb_per_req",
+            "value": 3.71,
+            "unit": "KB/req",
+            "extra": "Sync, 10 keys: memory growth per 1k requests with unique URLs (leak check)"
+          },
+          {
+            "name": "resources_steady_state_sync_middlewares · mem_growth_bytes_per_1k_req",
+            "value": 0,
+            "unit": "B per 1k req",
+            "extra": "Sync + Logging/RateLimit/Caching middlewares: memory growth per 1k requests"
+          },
+          {
+            "name": "resources_steady_state_sync_middlewares · alloc_kb_per_req",
+            "value": 3.98,
+            "unit": "KB/req",
+            "extra": "Sync + Logging/RateLimit/Caching middlewares: memory growth per 1k requests"
+          },
+          {
+            "name": "resources_steady_state_async · mem_growth_bytes_per_1k_req",
+            "value": 0,
+            "unit": "B per 1k req",
+            "extra": "Async, 10 keys: memory growth per 1k requests with unique URLs (leak check)"
+          },
+          {
+            "name": "resources_steady_state_async · alloc_kb_per_req",
+            "value": 10.18,
+            "unit": "KB/req",
+            "extra": "Async, 10 keys: memory growth per 1k requests with unique URLs (leak check)"
+          },
+          {
+            "name": "resources_import_cost · import_ms",
+            "value": 64.3,
+            "unit": "ms",
+            "extra": "Time and RSS added by `import apikeyrotator` in a fresh interpreter"
+          },
+          {
+            "name": "resources_import_cost · import_rss_mb",
+            "value": 14.6,
+            "unit": "MB",
+            "extra": "Time and RSS added by `import apikeyrotator` in a fresh interpreter"
+          },
+          {
+            "name": "e2e_sync_local_http · p50_us",
+            "value": 703.65,
+            "unit": "µs",
+            "extra": "Real HTTP round-trips to a local server (sync, keep-alive)"
+          },
+          {
+            "name": "e2e_async_local_http · p50_us",
+            "value": 7986.73,
             "unit": "µs",
             "extra": "Real HTTP round-trips to a local server (async, 50 concurrent)"
           }
