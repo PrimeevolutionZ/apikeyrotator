@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff>=0.6"
+      - run: ruff check .
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Run tests
+        run: pytest -q --cov=apikeyrotator --cov-report=term-missing:skip-covered
+
+  benchmark:
+    name: Benchmark vs base branch
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Benchmark base branch
+        id: base
+        continue-on-error: true  # the base branch may predate the benchmark or fail on it
+        run: |
+          git worktree add ../base "origin/${{ github.base_ref }}"
+          mkdir -p ../base/benchmarks
+          # Same benchmark code for both runs: only the library under test differs
+          cp benchmarks/bench_core.py ../base/benchmarks/
+          cd ../base
+          timeout 1200 python benchmarks/bench_core.py -n 2000 -r 3 --scenario-timeout 120 --save "$GITHUB_WORKSPACE/bench-base.json"
+      - name: Benchmark this PR
+        run: |
+          set -o pipefail
+          ARGS="-n 2000 -r 3 --scenario-timeout 120 --save bench-head.json"
+          if [ -f bench-base.json ]; then
+            # Gate only on machine-independent metrics; throughput is shown but not gated
+            ARGS="$ARGS --compare bench-base.json --gate deterministic --threshold 10"
+          fi
+          python benchmarks/bench_core.py $ARGS | tee bench.txt
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Benchmark"
+            echo '```'
+            cat bench.txt 2>/dev/null || echo "no benchmark output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            bench-base.json
+            bench-head.json
+            bench.txt
+          if-no-files-found: ignore
