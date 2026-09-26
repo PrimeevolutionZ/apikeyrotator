@@ -2,7 +2,7 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
-## [Unreleased]
+## [0.9.2] - 2026-09-26
 
 Fixes and cleanup from a second external review, each checked in code first.
 

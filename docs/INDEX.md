@@ -519,6 +519,13 @@ Recommended reading order:
 
 ---
 
+## What's New in 0.9.2
+
+- Config objects: `retry=RetryConfig(...)`, `rate_limits=`, `shared_state=`, `request=`, `http=` - group settings and share them between rotators
+- Redis: bans of rejected keys expire (`invalid_ttl`, default one day); all deadlines use the Redis server clock
+- Cancellation and Ctrl+C no longer wait for Redis; the first Redis error is logged right after boot
+- Type-checked with mypy in CI; `RateLimitMiddleware` and unused `utils` helpers deprecated (removal in 1.0)
+
 ## What's New in 0.9.1
 
 - New guide: [Behavior Under Load and Edge Cases](BEHAVIOR.md) - threads, processes, binary bodies, partial failures, Redis outages, with real output
