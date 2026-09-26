@@ -92,15 +92,16 @@ class TestRotationStrategies:
         with patch('requests.Session.request') as mock_request:
             mock_request.return_value = Mock(status_code=200, headers={}, content=b'')
 
-            for _ in range(100):
+            for _ in range(2000):
                 rotator.get('http://example.com')
                 auth = mock_request.call_args[1]['headers'].get('Authorization', '')
                 if auth.startswith('Bearer '):
                     keys_used.append(auth.replace('Bearer ', ''))
 
-        # key1 should be used ~70% of the time
+        # key1 should be used ~70% of the time: 1400 expected, sd ~20.5, so +-100
+        # (~4.9 sd) fails by chance about once in a million runs
         key1_count = keys_used.count('key1')
-        assert 60 < key1_count < 80  # Allow some variance
+        assert 1300 < key1_count < 1500
 
     @pytest.mark.skipif(not HAS_REQUESTS, reason="requests not installed")
     def test_lru_strategy(self):
