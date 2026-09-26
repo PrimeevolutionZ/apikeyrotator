@@ -1,12 +1,14 @@
 """Factory for creating secret providers"""
 
+from typing import Any
+
 from .base import SecretProvider
 from .environment import EnvironmentSecretProvider
 from .file import FileSecretProvider
 
 
 # Optional providers will be imported dynamically when requested
-def create_secret_provider(provider_type: str, **kwargs) -> SecretProvider:
+def create_secret_provider(provider_type: str, **kwargs: Any) -> SecretProvider:
     """
     Factory function for creating a secret provider.
 

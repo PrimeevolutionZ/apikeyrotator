@@ -2,6 +2,34 @@
 
 All notable changes to APIKeyRotator will be documented in this file.
 
+## [Unreleased]
+
+Fixes and cleanup from a second external review, each checked in code first.
+
+### Added
+- **Config objects** for the constructor groups: `RetryConfig` (`retry=`), `RateLimitConfig` (`rate_limits=`), `SharedStateConfig` (`shared_state=`), `RequestConfig` (`request=`), `HTTPConfig` (`http=`), next to the existing `CircuitBreakerConfig`. Frozen, so one object can be shared by several rotators. Flat arguments keep working; giving a value both ways raises `TypeError`.
+- `RedisStateBackend(invalid_ttl=86400)` / `InMemoryStateBackend(invalid_ttl=...)`: how long a key rejected with 401/403 stays banned for other instances (`None` = until `clear_invalid()`).
+- CI runs mypy (`mypy apikeyrotator`, 0 errors; there were 94); releases wait for it.
+
+### Fixed
+- **Redis bans never expired**: a key that got one 401 (also by accident) was banned for every worker until `clear_invalid()`. Bans now expire after `invalid_ttl` for other processes; the process that got the rejection itself still never reuses the key.
+- **Clock skew between machines**: rate-limit deadlines were written and expired with each client's `time.time()`, so a machine whose clock was 1000 s ahead parked a key for 1030 s instead of 30 s (measured on a real Redis). All deadlines are now computed on the Redis server clock; clients send durations.
+- **First Redis error was not logged on freshly booted machines**: the warning throttle started at `0.0` of `time.monotonic()`, which counts from boot, so during the first 30 s after boot (fresh CI runner, Lambda, new VM) the first failure was silent. This was the "flaky" `test_backend_failures_fail_open`.
+- **Cancellation waited for Redis**: when a task was cancelled (or Ctrl+C / `SystemExit`) while state updates were pending, the request engine first sent them to the backend and only then let the cancellation through (2 s with a slow backend in a test). Pending updates now go out from a background thread and the cancellation propagates at once.
+- `rotator.respect_rate_limit_headers` raised `AttributeError` (the attribute delegated to a misnamed field); every delegated attribute is now covered by a test.
+- `CachedAsyncResponse.json()` (cache hits of async rotators) accepts aiohttp's arguments (`encoding`, `loads`, `content_type`) instead of silently ignoring them.
+
+### Deprecated (removed in 1.0)
+- `RateLimitMiddleware`: duplicates the rotator's own handling (parking keys on 429 / `X-RateLimit-Remaining: 0`, waiting when every key is parked, `key_rate_limit`). Emits `DeprecationWarning`.
+- `apikeyrotator.utils.exponential_backoff`, `jittered_backoff`, `measure_time`, `measure_time_async`: unused by the library; moved to `utils/_deprecated.py` and warn on import. `retry_with_backoff` / `async_retry_with_backoff` stay (the AWS / GCP providers use them).
+
+### Changed
+- Redis keys: bans live in the sorted set `{namespace}:revoked` (with expiry); the old `{namespace}:invalid` set is no longer read, and `clear_invalid()` deletes it too. During a rolling upgrade, 0.9.1 and newer workers don't see each other's bans.
+- `utils/retry.py` no longer re-exports `CircuitBreaker` mid-file (import it from `apikeyrotator` or `apikeyrotator.utils`; the old path still works).
+
+### Documentation
+- [Behavior Under Load](docs/BEHAVIOR.md): cancelling requests, clocks, ban expiry; API Reference: config objects, `invalid_ttl`, deprecations; examples no longer use deprecated helpers.
+
 ## [0.9.1] - 2026-09-24
 
 Checks of thread safety, binary bodies, partial failures and Redis consistency in real

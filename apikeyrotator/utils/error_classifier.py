@@ -30,11 +30,11 @@ def get_header(headers: Mapping[str, Any] | None, name: str) -> str | None:
     except AttributeError:
         return None
     if value is not None or type(headers).__name__ in _CASE_INSENSITIVE_HEADERS:
-        return value
+        return None if value is None else str(value)
     name_lower = name.lower()
     for k, v in headers.items():
         if isinstance(k, str) and k.lower() == name_lower:
-            return v
+            return None if v is None else str(v)
     return None
 
 

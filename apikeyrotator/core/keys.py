@@ -101,10 +101,11 @@ class KeyPool:
     def select(self) -> str:
         """Picks the next key with the rotation strategy."""
         metrics = self._key_metrics
-        if not metrics:
+        strategy = self._strategy
+        if not metrics or strategy is None:
             raise AllKeysExhaustedError("No valid keys available")
         try:
-            return self._strategy.get_next_key(metrics)
+            return strategy.get_next_key(metrics)
         except ValueError as e:
             raise AllKeysExhaustedError(f"No valid keys available: {e}") from e
 
@@ -124,7 +125,9 @@ class KeyPool:
             del metrics[key]
             self._key_metrics = metrics
             keys = self._keys.copy()
-        self._strategy.update_keys(keys)
+        strategy = self._strategy
+        if strategy is not None:
+            strategy.update_keys(keys)
         return True
 
     def replace(self, new_keys: list[str]) -> None:

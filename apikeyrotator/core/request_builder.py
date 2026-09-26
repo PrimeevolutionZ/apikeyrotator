@@ -3,17 +3,20 @@
 from __future__ import annotations
 import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from apikeyrotator.middleware import RequestInfo
 
 from .util import host_of, mask_key
 
 
-API_KEY_PATTERNS = {
+#: Kept for backwards compatibility (re-exported by apikeyrotator.core.rotator)
+API_KEY_PATTERNS: dict[str, Any] = {
     'bearer': ('sk-', 'pk-'),
     'api_key': 32,
 }
+_BEARER_PREFIXES = ('sk-', 'pk-')
+_X_API_KEY_LENGTH = 32
 
 DEFAULT_AUTH_HEADERS = {
     'bearer': 'Authorization',
@@ -27,7 +30,7 @@ HeaderCallback = Callable[[str, dict | None], dict | tuple[dict, dict]]
 
 def infer_auth_header(key: str) -> tuple[str, str]:
     """Default auth header for a key: 32 characters -> X-API-Key, anything else -> Bearer."""
-    if len(key) == API_KEY_PATTERNS['api_key'] and not key.startswith(API_KEY_PATTERNS['bearer']):
+    if len(key) == _X_API_KEY_LENGTH and not key.startswith(_BEARER_PREFIXES):
         return DEFAULT_AUTH_HEADERS['api_key'], key
     return DEFAULT_AUTH_HEADERS['bearer'], f"Bearer {key}"
 
@@ -40,7 +43,7 @@ _AUTH_ALIASES = {
 }
 
 
-def resolve_auth(auth: AuthSpec) -> tuple[str, str] | bool | None:
+def resolve_auth(auth: AuthSpec) -> tuple[str, str] | Literal[False] | None:
     """
     Normalizes the ``auth`` argument.
 
@@ -48,8 +51,10 @@ def resolve_auth(auth: AuthSpec) -> tuple[str, str] | bool | None:
     "bearer" / "x-api-key" -> that scheme; (header, template) -> e.g.
     ("Authorization", "Token {key}") or ("x-goog-api-key", "{key}").
     """
-    if auth is None or auth is False:
-        return auth
+    if auth is None:
+        return None
+    if auth is False:
+        return False
     if isinstance(auth, str):
         alias = _AUTH_ALIASES.get(auth.lower())
         if alias is None:
@@ -61,7 +66,7 @@ def resolve_auth(auth: AuthSpec) -> tuple[str, str] | bool | None:
         return alias
     if (isinstance(auth, tuple) and len(auth) == 2 and all(isinstance(x, str) for x in auth)
             and "{key}" in auth[1]):
-        return auth
+        return auth[0], auth[1]
     raise ValueError("auth must be 'bearer', 'x-api-key', (header, template with '{key}'), False or None")
 
 
@@ -151,7 +156,8 @@ class RequestBuilder:
 
         key_in_callback = False
         if self.header_callback:
-            result = self.header_callback(key, custom_headers)
+            # Any: user code - checked below instead of trusting its annotation
+            result: Any = self.header_callback(key, custom_headers)
             if isinstance(result, tuple) and len(result) == 2:
                 callback_headers = result[0]
                 cookies.update(result[1])

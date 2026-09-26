@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine, Iterable
 from typing import Any
 
 
@@ -24,7 +24,7 @@ def mask_key(key: str, prefix: int = KEY_LOG_LENGTH) -> str:
     return f"{key[:prefix]}{KEY_LOG_SUFFIX}"
 
 
-def unique_labels(keys) -> dict[str, str]:
+def unique_labels(keys: Iterable[str]) -> dict[str, str]:
     """{key: masked label}, labels made unique with '#n' when masks collide."""
     labels: dict[str, str] = {}
     used: set[str] = set()
@@ -62,7 +62,7 @@ def host_of(url: str) -> str:
     return host.lower()
 
 
-def run_coroutine_sync(factory: Callable[[], Awaitable[Any]]) -> Any:
+def run_coroutine_sync[T](factory: Callable[[], Coroutine[Any, Any, T]]) -> T:
     """
     Runs a coroutine to completion from synchronous code.
 
@@ -79,7 +79,7 @@ def run_coroutine_sync(factory: Callable[[], Awaitable[Any]]) -> Any:
 
     result: dict[str, Any] = {}
 
-    def runner():
+    def runner() -> None:
         try:
             result['value'] = asyncio.run(factory())
         except BaseException as e:  # propagate to caller thread
@@ -90,7 +90,8 @@ def run_coroutine_sync(factory: Callable[[], Awaitable[Any]]) -> Any:
     thread.join()
     if 'error' in result:
         raise result['error']
-    return result.get('value')
+    value: T = result['value']
+    return value
 
 
 def in_running_loop() -> bool:

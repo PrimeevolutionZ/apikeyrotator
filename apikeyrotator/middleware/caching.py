@@ -152,7 +152,8 @@ class CachingMiddleware(RotatorMiddleware):
                     self.hits += 1
                     self.cache.move_to_end(cache_key)
                     self.logger.debug(f"Cache HIT for {request_info.url}")
-                    return cached['response']
+                    cached_response: ResponseInfo = cached['response']
+                    return cached_response
                 self._delete_entry(cache_key)
             self.misses += 1
         return request_info

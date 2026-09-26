@@ -3,6 +3,7 @@
 from __future__ import annotations
 import threading
 import time
+from collections.abc import Iterable
 
 from .base import SharedState, StateBackend
 
@@ -45,13 +46,15 @@ class InMemoryStateBackend(StateBackend):
 
     blocking = False
 
-    def __init__(self, shared: bool = True, salt: bytes | None = None):
+    def __init__(self, shared: bool = True, salt: bytes | None = None, invalid_ttl: float | None = 86400.0):
         self.shared = shared
         self.salt = salt
+        #: Seconds a rejected key stays banned for other rotators (None = until clear_invalid)
+        self.invalid_ttl = invalid_ttl
         self._lock = threading.Lock()
         self._buckets: dict[str, TokenBucket] = {}
         self._rate_limited: dict[str, float] = {}
-        self._invalid: set[str] = set()
+        self._invalid: dict[str, float] = {}   # key_id -> time it is forgotten
 
     def report_rate_limited(self, key_id: str, until: float) -> None:
         with self._lock:
@@ -59,23 +62,25 @@ class InMemoryStateBackend(StateBackend):
                 self._rate_limited[key_id] = until
 
     def report_invalid(self, key_id: str) -> None:
+        ttl = self.invalid_ttl
         with self._lock:
-            self._invalid.add(key_id)
+            self._invalid[key_id] = float('inf') if ttl is None else time.time() + ttl
 
     def clear_invalid(self, key_id: str | None = None) -> None:
         with self._lock:
             if key_id is None:
                 self._invalid.clear()
             else:
-                self._invalid.discard(key_id)
+                self._invalid.pop(key_id, None)
 
     def snapshot(self) -> SharedState:
         now = time.time()
         with self._lock:
             # Drop expired entries so the dict stays bounded
-            expired = [k for k, until in self._rate_limited.items() if until <= now]
-            for k in expired:
-                del self._rate_limited[k]
+            for entries in (self._rate_limited, self._invalid):
+                expired = [k for k, until in entries.items() if until <= now]
+                for k in expired:
+                    del entries[k]
             return SharedState(dict(self._rate_limited), frozenset(self._invalid))
 
     def acquire_token(self, key_id: str, capacity: int, refill_per_sec: float) -> float:
@@ -85,7 +90,7 @@ class InMemoryStateBackend(StateBackend):
                 bucket = self._buckets[key_id] = TokenBucket(capacity, refill_per_sec)
             return bucket.acquire()
 
-    def forget(self, key_ids) -> None:
+    def forget(self, key_ids: Iterable[str]) -> None:
         """Drops buckets of keys that are no longer used."""
         with self._lock:
             for k in key_ids:

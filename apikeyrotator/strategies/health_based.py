@@ -4,6 +4,7 @@ Health-Based rotation strategy
 
 import random
 import time
+from typing import Any
 
 from .base import BaseRotationStrategy, KeyMetrics
 
@@ -117,8 +118,8 @@ class HealthBasedStrategy(BaseRotationStrategy):
             key: str,
             success: bool,
             response_time: float = 0.0,
-            **kwargs
-    ):
+            **kwargs: Any
+    ) -> None:
         """
         Updates key metrics and marks as unhealthy when threshold exceeded.
 

@@ -53,7 +53,7 @@ class RotatorMetrics:
             success: bool,
             response_time: float,
             is_rate_limited: bool = False
-    ):
+    ) -> None:
         """
         Records request metrics.
 

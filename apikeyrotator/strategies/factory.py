@@ -3,6 +3,8 @@ Factory for creating rotation strategies
 """
 
 
+from typing import Any
+
 from .base import BaseRotationStrategy, RotationStrategy
 from .failover import FailoverRotationStrategy
 from .health_based import HealthBasedStrategy
@@ -15,7 +17,7 @@ from .weighted import WeightedRotationStrategy
 def create_rotation_strategy(
         strategy_type: str | RotationStrategy,
         keys: list[str] | dict[str, float],
-        **kwargs
+        **kwargs: Any
 ) -> BaseRotationStrategy:
     """
     Factory function for creating a rotation strategy.
@@ -96,4 +98,5 @@ def create_rotation_strategy(
             raise ValueError("Weighted strategy requires at least one key with weight")
 
     # Create strategy instance
-    return strategy_class(keys, **kwargs)
+    strategy: BaseRotationStrategy = strategy_class(keys, **kwargs)
+    return strategy

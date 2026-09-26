@@ -165,7 +165,14 @@ ERROR with a traceback at DEBUG level. Headers `Authorization`, `X-API-Key`,
 The middleware logs to the `apikeyrotator.middleware.logging` logger (or the
 `logger=` you pass); configure logging in your application to see the output.
 
-### RateLimitMiddleware
+### RateLimitMiddleware (deprecated)
+
+*Deprecated in 0.9.2, removed in 1.0.* The rotator does all of this itself: keys that
+answer `429` or report `X-RateLimit-Remaining: 0` are parked until their reset and
+skipped, the rotator waits only when every key is parked (also with a single key), and
+`key_rate_limit=(n, seconds)` enforces a known quota client-side
+([Resilience](RESILIENCE.md#client-side-rate-limits)). Existing code keeps working and
+gets a `DeprecationWarning`:
 
 ```python
 from apikeyrotator import APIKeyRotator, RateLimitMiddleware
@@ -187,10 +194,8 @@ It reads `X-RateLimit-Limit/Remaining/Reset` and the IETF `RateLimit-*` headers
 key has `remaining == 0` and its reset time is in the future, it waits until the
 reset (at most `max_wait`).
 
-**Do you need it?** The rotator already parks keys that answer `429` or report
-`X-RateLimit-Remaining: 0` and continues with other keys, and `key_rate_limit=`
-enforces a quota client-side ([Resilience](RESILIENCE.md)). The middleware is
-useful when you prefer *waiting* for a key - e.g. with a single key.
+To migrate, remove it from `middlewares=` and, if you know the quota, add
+`key_rate_limit=(n, seconds)`.
 
 ---
 
@@ -445,8 +450,8 @@ class SlowRequestMiddleware(RotatorMiddleware):
    `ResponseInfo.content` is available. For large downloads without middleware
    needs, use a rotator without middlewares (or `stream=True` with the sync rotator,
    where `content` is `None`).
-4. **Profile** with `apikeyrotator.utils.measure_time` / `measure_time_async`
-   (log durations at DEBUG level).
+4. **Profile** with `time.perf_counter()` around your calls, or read per-endpoint
+   times from `rotator.get_metrics()["endpoint_stats"]`.
 
 ---
 

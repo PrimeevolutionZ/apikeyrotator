@@ -76,7 +76,7 @@ class EndpointStats:
                 setattr(stats, field, value)
         return stats
 
-    def update(self, success: bool, response_time: float):
+    def update(self, success: bool, response_time: float) -> None:
         """
         Updates endpoint statistics (thread-safe).
 

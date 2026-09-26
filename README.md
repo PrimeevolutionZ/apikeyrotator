@@ -225,6 +225,21 @@ rotator = APIKeyRotator(
 response = rotator.get("https://api.example.com/data")
 ```
 
+The same settings can be grouped into objects and shared between rotators:
+
+```python
+from apikeyrotator import APIKeyRotator, RequestConfig, RetryConfig
+
+retry = RetryConfig(max_retries=5, base_delay=1.0, timeout=15.0)
+request = RequestConfig(user_agents=["Mozilla/5.0 ..."], random_delay_range=(1.0, 3.0))
+
+search = APIKeyRotator(api_keys=["s1", "s2"], retry=retry, request=request)
+geo = APIKeyRotator(api_keys=["g1"], retry=retry)
+```
+
+Groups: `RetryConfig`, `RateLimitConfig`, `SharedStateConfig`, `RequestConfig`,
+`HTTPConfig`, `CircuitBreakerConfig` ([API Reference](https://github.com/PrimeevolutionZ/apikeyrotator/tree/master/docs/API_REFERENCE.md#grouped-settings-config-objects)).
+
 ### Production Setup
 
 ```python
@@ -268,7 +283,7 @@ asyncio.run(main())
 - Anti-bot evasion (User-Agents, delays, proxies)
 - Sync & async, requests / aiohttp / httpx (HTTP/2)
 - Circuit breaker, deadlines, client-side rate limits
-- Clean, modern Python with full type hints
+- Clean, modern Python with full type hints (`py.typed`, checked with mypy in CI)
 
 ## Comparison
 

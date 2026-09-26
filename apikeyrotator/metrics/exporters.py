@@ -70,7 +70,7 @@ class PrometheusExporter:
         # Per-key metrics (if provided). Keys are masked - never export secrets.
         if key_metrics:
             key_rows = []
-            seen = {}
+            seen: dict[str, int] = {}
             for key, stats in key_metrics.items():
                 label = _mask_key(key)
                 seen[label] = seen.get(label, 0) + 1

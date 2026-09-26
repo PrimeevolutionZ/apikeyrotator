@@ -1,4 +1,7 @@
-"""Per-host circuit breakers."""
+"""
+Per-host circuit breakers: one ``utils.circuit_breaker.CircuitBreaker`` (the state
+machine, also usable on its own) per ``host[:port]``.
+"""
 
 from __future__ import annotations
 import threading

@@ -193,7 +193,12 @@ Shared: rate-limited keys (until when), keys rejected with 401/403, token bucket
 |---|---|---|
 | Token buckets (`key_rate_limit`) | strong - every token is taken in Redis atomically, so the limit is global across all processes | none |
 | Rate-limited keys (429, `X-RateLimit-Remaining: 0`) | eventual | up to `state_sync_interval` (default 1 s) + one Redis round trip |
-| Rejected keys (401/403) | eventual | same |
+| Rejected keys (401/403) | eventual; the ban expires after `invalid_ttl` (default 1 day) | same |
+
+All deadlines (parked-until times, bans, token buckets) are computed on the Redis server
+clock, so machines with different clocks park a key for the same time. The process
+that got a 401/403 itself never uses that key again until restarted; other processes
+follow the ban while it is in Redis.
 
 During that delay another process may still send a request with a key that was just
 limited or revoked; it gets the same 429/401 and handles it locally. Lower

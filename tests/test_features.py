@@ -428,6 +428,45 @@ class TestSharedState:
         assert b'k1' not in blob and b'k2' not in blob
         assert key_id('k1').encode() in blob or key_id('k2').encode() in blob
 
+    def test_revoked_keys_expire_after_invalid_ttl(self, redis_client):
+        backend = RedisStateBackend(client=redis_client, namespace="ttl", invalid_ttl=0.3)
+        backend.report_invalid("id1")
+        assert backend.snapshot().invalid == {"id1"}
+        time.sleep(0.4)
+        assert backend.snapshot().invalid == frozenset()
+
+    def test_revoked_keys_can_be_kept_until_cleared(self, redis_client):
+        backend = RedisStateBackend(client=redis_client, namespace="forever", invalid_ttl=None)
+        backend.report_invalid("id1")
+        redis_client.sadd("forever:invalid", "id-legacy")      # set written by 0.9.1 and earlier
+        assert backend.snapshot().invalid == {"id1"}
+        backend.clear_invalid()
+        assert backend.snapshot().invalid == frozenset() and not redis_client.exists("forever:invalid")
+
+    def test_ban_learned_from_others_expires_but_own_rejection_stays(self, redis_client):
+        def backend():
+            return RedisStateBackend(client=redis_client, namespace="ban", invalid_ttl=0.3)
+
+        a = make(['k1', 'k2'], state_backend=backend(), state_sync_interval=0)
+        with patch('requests.Session.request', side_effect=[resp(200), resp(401), resp(200)]):
+            a.get('http://api.test/x')   # k1 ok: auth confirmed
+            a.get('http://api.test/x')   # k2 rejected
+        b = make(['k1', 'k2'], state_backend=backend(), state_sync_interval=0)
+        with patch('requests.Session.request', return_value=resp(200)):
+            b.get('http://api.test/x')
+        assert b._state.filter_invalid(['k1', 'k2']) == ['k1']
+        time.sleep(0.4)
+        with patch('requests.Session.request', return_value=resp(200)):
+            a.get('http://api.test/x')
+            b.get('http://api.test/x')
+        assert b._state.filter_invalid(['k1', 'k2']) == ['k1', 'k2']   # a provider refresh may bring it back
+        assert a._state.filter_invalid(['k1', 'k2']) == ['k1']         # a saw the 401 itself
+        c = make(['k1', 'k2'], state_backend=backend(), state_sync_interval=0)
+        with patch('requests.Session.request', return_value=resp(200)) as mock_request:
+            c.get('http://api.test/x')
+            c.get('http://api.test/x')
+        assert set(used_keys(mock_request)) == {'k1', 'k2'}            # a new worker uses k2 again
+
     def test_redis_outage_does_not_break_requests(self):
         broken = Mock()
         broken.register_script.return_value = Mock(side_effect=ConnectionError("redis down"))
@@ -469,7 +508,7 @@ class TestSharedState:
             with patch('aiohttp.ClientSession.request', side_effect=mock_request):
                 response = await rotator.get('http://api.test/x')
         assert response.status == 200
-        assert redis_client.smembers("async:invalid") == {key_id('k1').encode()}
+        assert [m for m, _ in redis_client.zrange("async:revoked", 0, -1, withscores=True)] == [key_id("k1").encode()]
 
 
 # ============================================================================

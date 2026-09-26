@@ -1,3 +1,4 @@
+from .config import HTTPConfig, RateLimitConfig, RequestConfig, RetryConfig, SharedStateConfig
 from .config_loader import ConfigLoader
 from .exceptions import (
     AllKeysExhaustedError,
@@ -29,4 +30,9 @@ __all__ = [
     "UnifiedResponse",
     "Headers",
     "ConfigLoader",
+    "RetryConfig",
+    "RateLimitConfig",
+    "SharedStateConfig",
+    "RequestConfig",
+    "HTTPConfig",
 ]

@@ -112,7 +112,7 @@ Output:
 errors: []
 keys now: ['key-2', 'key-3', 'key-4']
   key-2: 64 requests
-  key-3: 62 requests
+  key-3: 63 requests
   key-4: 30 requests
 ```
 
@@ -198,6 +198,42 @@ Output:
 responses: 1000 - all distinct: True
 {'key-1': 334, 'key-2': 333, 'key-3': 333}
 ```
+
+### Cancelling a request
+
+`task.cancel()`, `asyncio.wait_for(...)`, `asyncio.timeout(...)` and Ctrl+C take effect at
+once, also during retries and backoff. State updates that were still to be sent to Redis
+go out from a background thread instead of delaying the cancellation.
+
+```python
+import asyncio
+import time
+
+from apikeyrotator import AsyncAPIKeyRotator
+
+async def main():
+    async with AsyncAPIKeyRotator(api_keys=["key-1", "key-2"]) as rotator:
+        started = time.monotonic()
+        try:
+            await asyncio.wait_for(rotator.get("https://api.example.com/slow"), timeout=0.3)
+        except TimeoutError:
+            print(f"gave up after {time.monotonic() - started:.1f}s")
+        print("next request:", (await rotator.get("https://api.example.com/items/7")).status)
+
+asyncio.run(main())
+```
+
+Output:
+
+```text
+gave up after 0.3s
+next request: 200
+```
+
+For a time budget that also counts retries and is handled by the rotator itself, use
+`total_timeout=` ([Resilience](RESILIENCE.md#request-deadline-total_timeout)).
+
+### Several event loops
 
 Do not use one async rotator from several event loops (for example several threads,
 each with `asyncio.run`): create one per loop. Do not call the sync `APIKeyRotator` from
@@ -286,9 +322,9 @@ Output:
 ```text
 round_robin   [600, 600, 600, 600]
 lru           [600, 600, 600, 600]
-random        [566, 603, 644, 587]
-weighted      [293, 278, 597, 1232]
-health_based  [618, 600, 587, 595]
+random        [597, 610, 561, 632]
+weighted      [302, 316, 630, 1152]
+health_based  [562, 613, 579, 646]
 failover      [2400, 0, 0, 0]
 ```
 
@@ -649,11 +685,16 @@ keys left: ['key-1', 'key-3'] | breaker: {'api.example.com': 'CLOSED'}
 |---|---|---|
 | Token buckets (`key_rate_limit`) | yes | strong: every token is taken atomically in Redis |
 | Rate-limited keys (`429`, `X-RateLimit-Remaining: 0`) | yes | eventual: within `state_sync_interval` (1 s) + one round trip |
-| Revoked keys (`401` / `403`) | yes | eventual, same delay |
+| Revoked keys (`401` / `403`) | yes, for `invalid_ttl` (1 day) | eventual, same delay |
 | Metrics, circuit breakers, rotation order, response cache | no - per process | - |
 
 Only `sha256(key)` (or an HMAC with `salt=`) is stored in Redis, never the key itself.
 Use one `namespace` per upstream provider (or per set of keys).
+
+**Clocks.** Every deadline in Redis - rate-limit resets, bans of revoked keys, token
+buckets - is computed on the Redis server clock. A process only sends "parked for 30 s"
+and reads back "29.4 s left", so machines whose clocks differ by minutes still park a key
+for the same 30 s.
 
 ### A global limit across processes
 
@@ -690,10 +731,10 @@ if __name__ == "__main__":
 Output:
 
 ```text
-worker 0: sent 5, denied 10
+worker 0: sent 6, denied 9
 worker 1: sent 5, denied 10
 worker 2: sent 5, denied 10
-worker 3: sent 5, denied 10
+worker 3: sent 4, denied 11
 ```
 
 Together exactly 20 requests got through (the split between workers depends on timing).
@@ -735,8 +776,18 @@ worker B: keys used ['key-1', 'key-1', 'key-1'], keys left ['key-1']
 
 Worker A found out the hard way; worker B never sent `revoked-2` at all.
 
-To use a re-enabled key again, clear it: `backend.clear_invalid(backend.key_id("the-key"))`
-(or `backend.clear_invalid()` for all keys of the namespace).
+How long a rejected key stays banned:
+
+| Who | Until |
+|---|---|
+| The process that got the `401` / `403` | the process restarts (or you set `rotator.keys` yourself) |
+| Other processes, and processes started later | `invalid_ttl` passes (default one day); then a provider refresh or a new worker may use the key again - if it is still revoked, it is rejected and banned again |
+
+So one accidental `401` does not ban a key for the whole fleet forever. Choose the TTL
+with `RedisStateBackend(..., invalid_ttl=3600)`; `invalid_ttl=None` keeps bans until
+cleared. To use a re-enabled key again at once, clear it:
+`backend.clear_invalid(backend.key_id("the-key"))` (or `backend.clear_invalid()` for all
+keys of the namespace).
 
 ### When Redis is unavailable
 
@@ -956,6 +1007,9 @@ counts: a request that needed a retry adds 2 to `total_requests`.
 | One host down | only its breaker opens; other hosts unaffected |
 | Revoked key | only that key is removed; the breaker ignores 4xx |
 | Redis down | fail open; local token buckets; retried every 5 s |
+| Clocks differ between machines | deadlines are computed on the Redis server clock |
+| One accidental `401` | banned for other workers for `invalid_ttl` (1 day), not forever |
+| Request cancelled / Ctrl+C | takes effect at once; pending Redis updates sent in the background |
 | Key with a comma | pass a list or a JSON array |
 | Unknown auth scheme | set `auth=`; a wrong header raises `AuthenticationError` and keeps the keys |
 

@@ -24,6 +24,14 @@ from apikeyrotator.strategies import BaseRotationStrategy, KeyMetrics, RotationS
 from apikeyrotator.utils import CircuitBreakerConfig, ErrorClassifier
 
 from .breakers import BreakerRegistry
+from .config import (
+    HTTPConfig,
+    RateLimitConfig,
+    RequestConfig,
+    RetryConfig,
+    SharedStateConfig,
+    merge_config,
+)
 from .config_loader import ConfigLoader
 from .engine import (
     AFTER,
@@ -80,18 +88,18 @@ class _Delegate:
 
     def __init__(self, component: str, attr: str | None = None):
         self.component = component
-        self.attr = attr
+        self.attr = attr or ""   # "" = same name as the rotator attribute (set in __set_name__)
 
-    def __set_name__(self, owner, name):
-        if self.attr is None:
+    def __set_name__(self, owner: type, name: str) -> None:
+        if not self.attr:
             self.attr = name
 
-    def __get__(self, obj, objtype=None):
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         if obj is None:
             return self
         return getattr(getattr(obj, self.component), self.attr)
 
-    def __set__(self, obj, value):
+    def __set__(self, obj: Any, value: Any) -> None:
         setattr(getattr(obj, self.component), self.attr, value)
 
 
@@ -103,23 +111,27 @@ class BaseKeyRotator:
     """
     Shared configuration and public API of both rotators.
 
-    Constructor arguments are grouped by the component they configure:
+    Constructor arguments are grouped by the component they configure. Groups marked
+    with a config class can also be passed as one object (``retry=RetryConfig(...)``,
+    see ``apikeyrotator.core.config``):
 
     - keys: ``api_keys``, ``env_var``, ``load_env_file``, ``secret_provider``,
       ``auto_refresh_interval``, ``rotation_strategy``, ``rotation_strategy_kwargs``,
       ``recovery_timeout``
-    - retries & time (RetryPolicy): ``max_retries``, ``base_delay``, ``max_delay``,
+    - retries & time (RetryPolicy, ``retry=RetryConfig``): ``max_retries``, ``base_delay``, ``max_delay``,
       ``timeout``, ``total_timeout``, ``retry_non_idempotent``,
-      ``should_retry_callback``, ``random_delay_range``, ``auto_idempotency_key``
-    - limits (RateLimiter, BreakerRegistry): ``key_rate_limit``,
-      ``respect_rate_limit_headers``, ``circuit_breaker``
-    - shared state (StateSync): ``state_backend``, ``state_sync_interval``
-    - request building (RequestBuilder): ``auth``, ``header_callback``, ``user_agents``,
-      ``proxy_list``, ``config_file``, ``config_loader``, ``save_sensitive_headers``
+      ``should_retry_callback``, ``auto_idempotency_key``
+    - limits (RateLimiter, ``rate_limits=RateLimitConfig``): ``key_rate_limit``,
+      ``respect_rate_limit_headers``; ``circuit_breaker=CircuitBreakerConfig``
+    - shared state (StateSync, ``shared_state=SharedStateConfig``): ``state_backend``,
+      ``state_sync_interval``
+    - request building (RequestBuilder, ``request=RequestConfig``): ``auth``,
+      ``header_callback``, ``user_agents``, ``proxy_list``, ``random_delay_range``;
+      ``config_file``, ``config_loader``, ``save_sensitive_headers``
     - observability & extensions: ``middlewares``, ``enable_metrics``,
       ``error_classifier``, ``logger``
-    - HTTP client: ``pool_size``, ``unified_response`` (+ ``http_backend``, ``http2``,
-      ``http_client_kwargs`` in the subclasses)
+    - HTTP client (``http=HTTPConfig``): ``pool_size``, ``http_backend``, ``http2``,
+      ``http_client_kwargs`` (the last three in the subclasses); ``unified_response``
 
     See docs/API_REFERENCE.md for every argument.
     """
@@ -139,7 +151,7 @@ class BaseKeyRotator:
     save_sensitive_headers = _Delegate('_builder')
     config = _Delegate('_builder')
     key_rate_limit = _Delegate('_limiter')
-    respect_rate_limit_headers = _Delegate('_limiter')
+    respect_rate_limit_headers = _Delegate('_limiter', 'respect_headers')
     circuit_breaker_config = _Delegate('_breakers', 'config')
     state_backend = _Delegate('_state', 'backend')
     state_sync_interval = _Delegate('_state', 'sync_interval')
@@ -185,8 +197,32 @@ class BaseKeyRotator:
             auth: str | tuple[str, str] | bool | None = None,
             unified_response: bool = False,
             auto_idempotency_key: bool | str = False,
+            *,
+            retry: RetryConfig | None = None,
+            rate_limits: RateLimitConfig | None = None,
+            shared_state: SharedStateConfig | None = None,
+            request: RequestConfig | None = None,
     ):
         self._logger = logger if logger else logging.getLogger(__name__)
+
+        # Grouped settings (retry=RetryConfig(...) etc.) or their flat arguments
+        r = merge_config("retry", retry, {
+            "max_retries": max_retries, "base_delay": base_delay, "max_delay": max_delay,
+            "timeout": timeout, "total_timeout": total_timeout,
+            "retry_non_idempotent": retry_non_idempotent, "auto_idempotency_key": auto_idempotency_key,
+            "should_retry_callback": should_retry_callback,
+        })
+        lim = merge_config("rate_limits", rate_limits, {
+            "key_rate_limit": key_rate_limit, "respect_rate_limit_headers": respect_rate_limit_headers,
+        })
+        st = merge_config("shared_state", shared_state, {
+            "state_backend": state_backend, "state_sync_interval": state_sync_interval,
+        })
+        req = merge_config("request", request, {
+            "auth": auth, "header_callback": header_callback, "user_agents": user_agents,
+            "proxy_list": proxy_list, "random_delay_range": random_delay_range,
+        })
+        state_backend, key_rate_limit = st["state_backend"], lim["key_rate_limit"]
 
         if load_env_file:
             try:
@@ -198,13 +234,7 @@ class BaseKeyRotator:
                 # file's location, which never finds the application's .env once installed
                 load_dotenv(find_dotenv(usecwd=True))
 
-        self._policy = RetryPolicy(
-            max_retries=max_retries, base_delay=base_delay, max_delay=max_delay,
-            timeout=timeout, total_timeout=total_timeout,
-            retry_non_idempotent=retry_non_idempotent,
-            should_retry_callback=should_retry_callback, random_delay_range=random_delay_range,
-            auto_idempotency_key=auto_idempotency_key,
-        )
+        self._policy = RetryPolicy(**r, random_delay_range=req["random_delay_range"])
 
         # --- keys ---
         self.secret_provider = secret_provider
@@ -236,10 +266,10 @@ class BaseKeyRotator:
         # --- limits & shared state ---
         if state_backend is None and key_rate_limit is not None:
             state_backend = InMemoryStateBackend(shared=False)
-        self._state = StateSync(state_backend, state_sync_interval, self._pool, self._logger,
+        self._state = StateSync(state_backend, st["state_sync_interval"], self._pool, self._logger,
                                 on_invalid=self._pool.remove)
         self._limiter = RateLimiter(self._pool, self._state, self._policy, key_rate_limit,
-                                    respect_rate_limit_headers)
+                                    lim["respect_rate_limit_headers"])
         self._breakers = BreakerRegistry(circuit_breaker)
 
         # --- request building ---
@@ -249,10 +279,10 @@ class BaseKeyRotator:
             config_loader = ConfigLoader(config_file=config_file, logger=self._logger)
         self.config_loader = config_loader
         self._builder = RequestBuilder(
-            header_callback=header_callback, user_agents=user_agents, proxy_list=proxy_list,
-            save_sensitive_headers=save_sensitive_headers,
+            header_callback=req["header_callback"], user_agents=req["user_agents"],
+            proxy_list=req["proxy_list"], save_sensitive_headers=save_sensitive_headers,
             config=config_loader.load_config() if config_loader is not None else {},
-            auth=auth,
+            auth=req["auth"],
         )
 
         self._chain = MiddlewareChain(middlewares, self._logger)
@@ -271,6 +301,17 @@ class BaseKeyRotator:
         self._log_initialization_summary()
 
     _SYNC = True
+
+    @staticmethod
+    def _http_settings(http: HTTPConfig | None, default_backend: str, http_backend: str, http2: bool,
+                       http_client_kwargs: dict[str, Any] | None, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Resolves ``http=HTTPConfig(...)`` against the flat HTTP arguments (sets kwargs['pool_size'])."""
+        settings = merge_config("http", http, {
+            "http_backend": http_backend, "http2": http2, "http_client_kwargs": http_client_kwargs,
+            "pool_size": kwargs.get("pool_size", DEFAULT_POOL_SIZE),
+        }, flat_defaults={"http_backend": default_backend})
+        kwargs["pool_size"] = settings["pool_size"]
+        return settings
 
     def _defer_provider_keys(self) -> bool:
         """Should provider keys be loaded on first use instead of in the constructor?"""
@@ -338,7 +379,7 @@ class BaseKeyRotator:
         return self._pool.keys()
 
     @keys.setter
-    def keys(self, new_keys: list[str]):
+    def keys(self, new_keys: list[str]) -> None:
         cleaned = parse_keys(list(new_keys), logger=self.logger)
         self._pool.replace(cleaned)
         self._state.forget_except(cleaned)
@@ -406,7 +447,7 @@ class BaseKeyRotator:
         """Circuit breaker state per host ('CLOSED' / 'OPEN' / 'HALF_OPEN')."""
         return self._breakers.states()
 
-    def reset_key_health(self, key: str | None = None):
+    def reset_key_health(self, key: str | None = None) -> None:
         self._pool.reset_health(key)
 
     def export_config(self) -> dict[str, Any]:
@@ -481,11 +522,13 @@ class APIKeyRotator(BaseKeyRotator):
 
     _SYNC = True
 
-    def __init__(self, *args, http_backend: str = "requests", http2: bool = False,
-                 http_client_kwargs: dict[str, Any] | None = None, **kwargs):
+    def __init__(self, *args: Any, http_backend: str = "requests", http2: bool = False,
+                 http_client_kwargs: dict[str, Any] | None = None, http: HTTPConfig | None = None,
+                 **kwargs: Any):
+        h = self._http_settings(http, "requests", http_backend, http2, http_client_kwargs, kwargs)
         super().__init__(*args, **kwargs)
         self._transport: SyncTransport = create_sync_transport(
-            http_backend, self.pool_size, http2, http_client_kwargs
+            h["http_backend"], self.pool_size, h["http2"], h["http_client_kwargs"]
         )
         self._engine.status_of = self._transport.status
         self.http_backend = self._transport.name
@@ -540,11 +583,12 @@ class APIKeyRotator(BaseKeyRotator):
 
     # --- request ---
 
-    def request(self, method: str, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def request(self, method: str, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         self._validate_url(url)
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.debug("Initiating %s request to %s", method, url)
-        return self._drive(self._engine.run(method, url, kwargs))
+        response: requests.Response | UnifiedResponse = self._drive(self._engine.run(method, url, kwargs))
+        return response
 
     def _drive(self, flow: Flow) -> Any:
         """Performs the engine's effects with blocking I/O."""
@@ -598,22 +642,22 @@ class APIKeyRotator(BaseKeyRotator):
             except BaseException as e:  # deliver into the engine so its cleanup runs
                 error, value = e, None
 
-    def get(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def get(self, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         return self.request("GET", url, **kwargs)
 
-    def post(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def post(self, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         return self.request("POST", url, **kwargs)
 
-    def put(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def put(self, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         return self.request("PUT", url, **kwargs)
 
-    def patch(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def patch(self, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         return self.request("PATCH", url, **kwargs)
 
-    def delete(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def delete(self, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         return self.request("DELETE", url, **kwargs)
 
-    def head(self, url: str, **kwargs) -> requests.Response | UnifiedResponse:
+    def head(self, url: str, **kwargs: Any) -> requests.Response | UnifiedResponse:
         return self.request("HEAD", url, **kwargs)
 
 
@@ -639,11 +683,13 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
     _SYNC = False
 
-    def __init__(self, *args, http_backend: str = "aiohttp", http2: bool = False,
-                 http_client_kwargs: dict[str, Any] | None = None, **kwargs):
+    def __init__(self, *args: Any, http_backend: str = "aiohttp", http2: bool = False,
+                 http_client_kwargs: dict[str, Any] | None = None, http: HTTPConfig | None = None,
+                 **kwargs: Any):
+        h = self._http_settings(http, "aiohttp", http_backend, http2, http_client_kwargs, kwargs)
         super().__init__(*args, **kwargs)
         self._transport: AsyncTransport = create_async_transport(
-            http_backend, self.pool_size, self.timeout, http2, http_client_kwargs
+            h["http_backend"], self.pool_size, self.timeout, h["http2"], h["http_client_kwargs"]
         )
         self._engine.status_of = self._transport.status
         self.http_backend = self._transport.name
@@ -659,6 +705,7 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
         if self._keys_pending:
             async with self._keys_lock:
                 if self._keys_pending:
+                    assert self.secret_provider is not None   # _keys_pending is only set with one
                     provider_keys = await self.secret_provider.get_keys()
                     if not provider_keys:
                         self.logger.warning(
@@ -738,14 +785,15 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
 
     # --- request ---
 
-    async def request(self, method: str, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def request(self, method: str, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         self._validate_url(url)
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.debug("Initiating async %s request to %s", method, url)
         if self._keys_pending:
             await self.load_keys()
         self._ensure_background_tasks()
-        return await self._drive(self._engine.run(method, url, kwargs))
+        response: aiohttp.ClientResponse | UnifiedResponse = await self._drive(self._engine.run(method, url, kwargs))
+        return response
 
     async def _drive(self, flow: Flow) -> Any:
         """Performs the engine's effects with asyncio."""
@@ -799,20 +847,20 @@ class AsyncAPIKeyRotator(BaseKeyRotator):
             except BaseException as e:  # deliver into the engine so its cleanup runs
                 error, value = e, None
 
-    async def get(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def get(self, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("GET", url, **kwargs)
 
-    async def post(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def post(self, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("POST", url, **kwargs)
 
-    async def put(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def put(self, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("PUT", url, **kwargs)
 
-    async def patch(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def patch(self, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("PATCH", url, **kwargs)
 
-    async def delete(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def delete(self, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("DELETE", url, **kwargs)
 
-    async def head(self, url: str, **kwargs) -> aiohttp.ClientResponse | UnifiedResponse:
+    async def head(self, url: str, **kwargs: Any) -> aiohttp.ClientResponse | UnifiedResponse:
         return await self.request("HEAD", url, **kwargs)

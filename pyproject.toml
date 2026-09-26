@@ -117,6 +117,7 @@ dev = [
     "ruff>=0.0.287",
     "mypy>=1.5.0",
     "types-requests>=2.31.0",
+    "types-PyYAML>=6.0",
     "pre-commit>=3.3.0",
 ]
 
@@ -345,11 +346,6 @@ disallow_incomplete_defs = true
 disallow_untyped_decorators = false
 no_implicit_optional = true
 warn_incomplete_stub = true
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-disallow_untyped_defs = false
-check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = "requests.*"

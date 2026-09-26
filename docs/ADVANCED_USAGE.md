@@ -32,7 +32,7 @@ headers.
 
 ```python
 import logging
-from apikeyrotator import APIKeyRotator, CachingMiddleware, LoggingMiddleware, RateLimitMiddleware
+from apikeyrotator import APIKeyRotator, CachingMiddleware, LoggingMiddleware
 
 logging.basicConfig(level=logging.INFO)   # needed to see LoggingMiddleware output
 
@@ -41,7 +41,6 @@ rotator = APIKeyRotator(
     middlewares=[
         CachingMiddleware(ttl=600, max_cache_size=1000),
         LoggingMiddleware(verbose=True),
-        RateLimitMiddleware(pause_on_limit=True),
     ],
 )
 
@@ -90,21 +89,18 @@ rotator = APIKeyRotator(
 
 Sensitive headers (`Authorization`, `X-API-Key`, `Cookie`) are redacted.
 
-#### RateLimitMiddleware
+#### Rate limits (no middleware needed)
+
+`RateLimitMiddleware` is deprecated (0.9.2, removed in 1.0): the rotator itself parks
+keys that return `429` or `X-RateLimit-Remaining: 0` until their reset, switches to
+other keys, and waits only when every key is parked - also with a single key.
+Known quotas are enforced before the server does with a token bucket:
 
 ```python
-from apikeyrotator import APIKeyRotator, RateLimitMiddleware
+from apikeyrotator import APIKeyRotator
 
-rate_limit = RateLimitMiddleware(pause_on_limit=True, max_wait=60)
-rotator = APIKeyRotator(api_keys=["key1", "key2"], middlewares=[rate_limit])
-
-print(rate_limit.get_stats())   # {'tracked_keys': ..., 'active_limits': ..., 'max_tracked_keys': ...}
+rotator = APIKeyRotator(api_keys=["key1", "key2"], key_rate_limit=(60, 60))   # 60/min per key
 ```
-
-The rotator already parks keys that return `429` or `X-RateLimit-Remaining: 0`
-and switches to other keys. This middleware additionally *waits* (up to
-`max_wait` seconds) when the selected key's quota is used up - useful with a
-single key.
 
 > `RetryMiddleware` was removed in 0.6.1 - retries are built into the rotator
 > (`max_retries`, `base_delay`, `max_delay`, `total_timeout`).

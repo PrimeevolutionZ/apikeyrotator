@@ -25,6 +25,11 @@ from .core import (
     AsyncAPIKeyRotator,
     ConfigLoader,
     Headers,
+    HTTPConfig,
+    RateLimitConfig,
+    RequestConfig,
+    RetryConfig,
+    SharedStateConfig,
     UnifiedResponse,
     parse_keys,
 )
@@ -117,6 +122,11 @@ __all__ = [
     "ConfigLoader",
     "UnifiedResponse",
     "Headers",
+    "RetryConfig",
+    "RateLimitConfig",
+    "SharedStateConfig",
+    "RequestConfig",
+    "HTTPConfig",
 
     # Strategies
     "RotationStrategy",

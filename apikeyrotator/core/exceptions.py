@@ -51,7 +51,7 @@ class AuthenticationError(AllKeysExhaustedError):
     """
 
     def __init__(self, message: str, statuses: dict[str, int] | None = None,
-                 auth_header: str | None = None, **kwargs):
+                 auth_header: str | None = None, **kwargs: Any):
         super().__init__(message, **kwargs)
         self.statuses = statuses or {}
         self.auth_header = auth_header
@@ -96,7 +96,7 @@ class CircuitOpenError(AllKeysExhaustedError):
         retry_after: Seconds until a probe request will be allowed.
     """
 
-    def __init__(self, host: str, retry_after: float, **kwargs):
+    def __init__(self, host: str, retry_after: float, **kwargs: Any):
         super().__init__(
             f"Circuit breaker open for {host}; retry in {retry_after:.1f}s", **kwargs
         )

@@ -6,6 +6,7 @@ the test plays the role of the driver.
 
 import asyncio
 import logging
+import threading
 
 import pytest
 
@@ -242,6 +243,17 @@ class TestStateSync:
         state.flush(reports)  # logged, not raised
         assert "redis down" in caplog.text
 
+    def test_first_backend_error_is_logged_right_after_boot(self, caplog, monkeypatch):
+        """time.monotonic() counts from boot: a fresh VM / CI runner starts near 0."""
+        class Broken(InMemoryStateBackend):
+            def acquire_token(self, *args):
+                raise ConnectionError("redis down")
+
+        monkeypatch.setattr("time.monotonic", lambda: 5.0)
+        pool = KeyPool(["k1"], "round_robin", None, LOG)
+        StateSync(Broken(), 1.0, pool, LOG, on_invalid=pool.remove).acquire_token("k1", 1, 1.0)
+        assert "redis down" in caplog.text
+
     def test_backend_outage_keeps_token_buckets_locally_and_backs_off(self):
         calls = []
 
@@ -266,6 +278,15 @@ class TestStateSync:
 
 
 class TestPublicAttributesReachComponents:
+    def test_every_delegated_attribute_is_readable_and_writable(self):
+        from apikeyrotator.core.rotator import BaseKeyRotator, _Delegate
+
+        rotator = make_rotator()
+        names = [n for n, v in vars(BaseKeyRotator).items() if isinstance(v, _Delegate)]
+        assert "respect_rate_limit_headers" in names
+        for name in names:
+            setattr(rotator, name, getattr(rotator, name))   # AttributeError if mis-wired
+
     def test_setting_attributes_after_construction(self):
         rotator = make_rotator()
         rotator.max_retries = 7
@@ -371,7 +392,8 @@ class TestAsyncLazyProviderKeys:
 
 
 class TestEngineCleanupWithBlockingBackend:
-    def test_pending_reports_are_flushed_before_an_exception_propagates(self):
+    @staticmethod
+    def _flow_with_pending_report():
         class BlockingBackend(InMemoryStateBackend):
             blocking = True  # like Redis: async rotators offload calls to a thread
 
@@ -391,12 +413,26 @@ class TestEngineCleanupWithBlockingBackend:
         assert flow.send(Resp(429, {"Retry-After": "30"}))[0] == READ
         assert flow.send(b"")[0] == AFTER
         assert flow.send(None)[0] == ON_ERROR  # the 429 report is pending
-        effect = flow.throw(KeyboardInterrupt())
+        return flow, backend
+
+    def test_pending_reports_are_flushed_when_a_middleware_fails(self):
+        flow, backend = self._flow_with_pending_report()
+        effect = flow.throw(RuntimeError("hook failed"))
         assert effect[0] == CALL                     # reports flushed off the event loop...
         effect[1](*effect[2])
-        with pytest.raises(KeyboardInterrupt):       # ...then the exception continues
+        with pytest.raises(RuntimeError):            # ...then the exception continues
             flow.send(None)
         assert backend.snapshot().rate_limited       # the rate limit reached shared state
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, asyncio.CancelledError, SystemExit])
+    def test_cancellation_does_not_wait_for_the_backend(self, interrupt):
+        flow, backend = self._flow_with_pending_report()
+        with pytest.raises(interrupt):               # raised at once, no effect yielded
+            flow.throw(interrupt())
+        for thread in threading.enumerate():
+            if thread.name == "apikeyrotator-flush":
+                thread.join(5)
+        assert backend.snapshot().rate_limited       # still reported, from a daemon thread
 
 
 class TestAuthOption:

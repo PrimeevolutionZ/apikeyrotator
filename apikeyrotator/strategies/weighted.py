@@ -102,13 +102,16 @@ class WeightedRotationStrategy(BaseRotationStrategy):
         """Updates available keys, preserving weights for existing keys."""
         with self._lock:
             self._keys = list(new_keys)
+            weights = self._weights
+            if weights is None:   # always set by __init__; keeps the type checker informed
+                weights = self._weights = {}
             # Filter weights to only keep existing keys
-            self._keys_list = [k for k in new_keys if k in self._weights]
-            self._weights_list = [self._weights[k] for k in self._keys_list]
+            self._keys_list = [k for k in new_keys if k in weights]
+            self._weights_list = [weights[k] for k in self._keys_list]
             # Assign default weight 1.0 for any new keys not in original weights
             for k in new_keys:
-                if k not in self._weights:
+                if k not in weights:
                     self._keys_list.append(k)
                     self._weights_list.append(1.0)
-                    self._weights[k] = 1.0
+                    weights[k] = 1.0
             self._rebuild_cumulative()

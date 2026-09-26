@@ -80,7 +80,7 @@ class LoggingMiddleware(RotatorMiddleware):
 
     # --- Implementation (Common Logic) ---
 
-    def _log_request(self, request_info: RequestInfo):
+    def _log_request(self, request_info: RequestInfo) -> None:
         if not self._should_log():
             return
 
@@ -97,7 +97,7 @@ class LoggingMiddleware(RotatorMiddleware):
         else:
             self.logger.info(f"{request_info.method} {request_info.url}")
 
-    def _log_response(self, response_info: ResponseInfo):
+    def _log_response(self, response_info: ResponseInfo) -> None:
         if not self._should_log():
             return
 
@@ -131,7 +131,7 @@ class LoggingMiddleware(RotatorMiddleware):
                 f"Response headers: {self._format_headers(response_info.headers)}"
             )
 
-    def _log_error(self, error_info: ErrorInfo):
+    def _log_error(self, error_info: ErrorInfo) -> None:
         if not self._should_log():
             return
 

@@ -83,7 +83,7 @@ class RetryPolicy:
     def backoff(self, attempt: int) -> float:
         # Cap the exponent too, to avoid float overflow for huge max_retries
         delay = min(self.base_delay * (2 ** min(attempt, 30)), self.max_delay)
-        return min(delay + random.uniform(0, delay * 0.1), self.max_delay)
+        return float(min(delay + random.uniform(0, delay * 0.1), self.max_delay))
 
     def random_delay(self) -> float:
         low_high = self.random_delay_range

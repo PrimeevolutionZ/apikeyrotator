@@ -62,12 +62,13 @@ def parse_keys(
 
     # Case 1: Keys passed directly
     if api_keys is not None:
-        if isinstance(api_keys, str):
+        given: object = api_keys   # callers without type checking may pass anything
+        if isinstance(given, str):
             # Parsing comma-separated string
-            keys = [k.strip() for k in api_keys.split(",") if k.strip()]
-        elif isinstance(api_keys, (list, tuple)):
+            keys = [k.strip() for k in given.split(",") if k.strip()]
+        elif isinstance(given, (list, tuple)):
             # Cleaning list from empty strings and spaces
-            keys = [k.strip() for k in api_keys if isinstance(k, str) and k.strip()]
+            keys = [k.strip() for k in given if isinstance(k, str) and k.strip()]
         else:
             logger.error("API keys must be a list or comma-separated string.")
             raise NoAPIKeysError("API keys must be a list or comma-separated string")

@@ -106,8 +106,8 @@ class KeyMetrics:
         success: bool,
         response_time: float = 0.0,
         is_rate_limited: bool = False,
-        **kwargs
-    ):
+        **kwargs: Any
+    ) -> None:
         """
         Updates metrics based on request result.
 
@@ -270,7 +270,7 @@ class BaseRotationStrategy(ABC):
             if not keys:
                 raise ValueError("Keys dictionary cannot be empty")
             self._keys = list(keys.keys())
-            self._weights = keys
+            self._weights: dict[str, float] | None = keys
         else:
             if not keys:
                 raise ValueError("Keys list cannot be empty")
@@ -322,8 +322,8 @@ class BaseRotationStrategy(ABC):
             key: str,
             success: bool,
             response_time: float = 0.0,
-            **kwargs
-    ):
+            **kwargs: Any
+    ) -> None:
         """
         Updates key metrics after request (optional).
 

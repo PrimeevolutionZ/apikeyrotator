@@ -41,6 +41,33 @@ return tostring(wait)
 """
 
 
+# Every deadline is computed on the Redis server clock: clients only send durations,
+# so clock skew between machines does not change how long a key stays parked.
+_SERVER_NOW_LUA = """
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
+"""
+
+# KEYS[1] = zset; ARGV[1] = member, ARGV[2] = seconds from now (< 0: forever)
+_PARK_LUA = _SERVER_NOW_LUA + """
+local seconds = tonumber(ARGV[2])
+local score = '+inf'
+if seconds >= 0 then
+    score = tostring(now + seconds)
+end
+redis.call('ZADD', KEYS[1], 'GT', score, ARGV[1])
+return 1
+"""
+
+# KEYS[1] = rate-limited zset, KEYS[2] = revoked zset; drops expired entries and returns
+# {server now, [member, score, ...], [member, ...]}
+_SNAPSHOT_LUA = _SERVER_NOW_LUA + """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+return {tostring(now), redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES'), redis.call('ZRANGE', KEYS[2], 0, -1)}
+"""
+
+
 def _decode(value: Any) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
@@ -49,10 +76,10 @@ class RedisStateBackend(StateBackend):
     """
     Shared state in Redis (``pip install apikeyrotator[redis]``).
 
-    Stores, under ``{namespace}:*``:
-    - ``rl``      sorted set: key_id -> UNIX time until the key is rate limited
-    - ``invalid`` set of key_ids rejected with 401/403
-    - ``tb:{id}`` token bucket hashes (atomic Lua script, Redis server clock)
+    Stores, under ``{namespace}:*`` (all times on the Redis server clock):
+    - ``rl``      sorted set: key_id -> time until the key is rate limited
+    - ``revoked`` sorted set: key_id rejected with 401/403 -> time it is forgotten
+    - ``tb:{id}`` token bucket hashes (atomic Lua script)
 
     Only key hashes are stored (see :func:`key_id`), never raw API keys.
 
@@ -72,6 +99,7 @@ class RedisStateBackend(StateBackend):
             salt: bytes | None = None,
             bucket_ttl: int = 3600,
             socket_timeout: float | None = 1.0,
+            invalid_ttl: float | None = 86400.0,
     ):
         """
         Args:
@@ -82,6 +110,9 @@ class RedisStateBackend(StateBackend):
             bucket_ttl: Seconds after which idle token buckets expire.
             socket_timeout: Connect / read timeout of the client created from ``url``
                 (an unreachable Redis must not stall requests; ignored with ``client``).
+            invalid_ttl: Seconds a key rejected with 401/403 stays banned for other
+                instances (default one day; None = until ``clear_invalid``). A process
+                that got the rejection itself does not use the key again until restarted.
         """
         if client is None:
             try:
@@ -96,33 +127,37 @@ class RedisStateBackend(StateBackend):
         self.namespace = namespace
         self.salt = salt
         self.bucket_ttl = int(bucket_ttl)
+        self.invalid_ttl = invalid_ttl
         self._rl = f"{namespace}:rl"
-        self._invalid = f"{namespace}:invalid"
+        self._revoked = f"{namespace}:revoked"
+        self._legacy_invalid = f"{namespace}:invalid"   # set without expiry, used before 0.9.2
         self._bucket_script = client.register_script(_TOKEN_BUCKET_LUA)
+        self._park_script = client.register_script(_PARK_LUA)
+        self._snapshot_script = client.register_script(_SNAPSHOT_LUA)
 
     def report_rate_limited(self, key_id: str, until: float) -> None:
-        # GT: only move the deadline forward (new members are always added)
-        self._r.zadd(self._rl, {key_id: until}, gt=True)
+        # Only the remaining duration is sent; GT only ever moves a deadline forward
+        self._park_script(keys=[self._rl], args=[key_id, max(0.0, until - time.time())])
 
     def report_invalid(self, key_id: str) -> None:
-        self._r.sadd(self._invalid, key_id)
+        ttl = self.invalid_ttl
+        self._park_script(keys=[self._revoked], args=[key_id, -1 if ttl is None else ttl])
 
     def clear_invalid(self, key_id: str | None = None) -> None:
         if key_id is None:
-            self._r.delete(self._invalid)
+            self._r.delete(self._revoked, self._legacy_invalid)
         else:
-            self._r.srem(self._invalid, key_id)
+            self._r.zrem(self._revoked, key_id)
+            self._r.srem(self._legacy_invalid, key_id)
 
     def snapshot(self) -> SharedState:
-        now = time.time()
-        pipe = self._r.pipeline(transaction=False)
-        pipe.zremrangebyscore(self._rl, "-inf", now)
-        pipe.zrangebyscore(self._rl, now, "+inf", withscores=True)
-        pipe.smembers(self._invalid)
-        _, limited, invalid = pipe.execute()
+        server_now, limited, revoked = self._snapshot_script(keys=[self._rl, self._revoked])
+        # Server deadlines -> local clock: only the remaining time is taken from Redis
+        offset = time.time() - float(_decode(server_now))
+        pairs = iter(limited)
         return SharedState(
-            {_decode(member): float(score) for member, score in limited},
-            frozenset(_decode(member) for member in invalid),
+            {_decode(member): float(_decode(score)) + offset for member, score in zip(pairs, pairs)},
+            frozenset(_decode(member) for member in revoked),
         )
 
     def acquire_token(self, key_id: str, capacity: int, refill_per_sec: float) -> float:

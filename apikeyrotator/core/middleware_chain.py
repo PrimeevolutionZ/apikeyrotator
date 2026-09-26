@@ -27,7 +27,7 @@ def _overrides(middleware: Any, name: str) -> bool:
     return impl is not getattr(RotatorMiddleware, name, None)
 
 
-def _async_hook(middleware: Any, name: str, sync_name: str):
+def _async_hook(middleware: Any, name: str, sync_name: str) -> Any:
     """The async hook, or the sync one for middlewares that only implement sync hooks."""
     hook = getattr(middleware, name, None)
     return hook if hook is not None else getattr(middleware, sync_name, None)

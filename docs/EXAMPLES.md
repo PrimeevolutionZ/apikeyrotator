@@ -170,31 +170,35 @@ rotator.get("https://api.example.com/data")
 # 200 from https://api.example.com/data (key: key1****) (0.234s)
 ```
 
-### Rate Limit Middleware
+### Rate Limits Without Middleware
+
+The rotator parks keys that answer `429` or `X-RateLimit-Remaining: 0` by itself
+(`RateLimitMiddleware` is deprecated). Enforce a known quota and see which keys are parked:
 
 ```python
-from apikeyrotator import APIKeyRotator, RateLimitMiddleware
+import time
+from apikeyrotator import APIKeyRotator
 
-rate_limit = RateLimitMiddleware(pause_on_limit=True, max_wait=60)
-rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"], middlewares=[rate_limit])
+rotator = APIKeyRotator(api_keys=["key1", "key2", "key3"], key_rate_limit=(60, 60))
 
 for i in range(1000):
     rotator.get(f"https://api.example.com/item/{i}")
 
-stats = rate_limit.get_stats()
-print(f"Tracked keys: {stats['tracked_keys']}, currently limited: {stats['active_limits']}")
+now = time.time()
+limited = [k for k, s in rotator.get_key_statistics().items() if s["rate_limit_reset"] > now]
+print(f"Keys: {rotator.key_count}, currently limited: {len(limited)}")
 ```
 
 ### Combining Multiple Middleware
 
 ```python
-from apikeyrotator import APIKeyRotator, CachingMiddleware, LoggingMiddleware, RateLimitMiddleware
+from apikeyrotator import APIKeyRotator, CachingMiddleware, LoggingMiddleware
 
 rotator = APIKeyRotator(
     api_keys=["key1", "key2", "key3"],
-    # Every hook runs in list order: cache -> logging -> rate limit.
+    # Every hook runs in list order: cache -> logging.
     # A cache hit returns before the other before_request hooks run.
-    middlewares=[CachingMiddleware(ttl=300), LoggingMiddleware(), RateLimitMiddleware()],
+    middlewares=[CachingMiddleware(ttl=300), LoggingMiddleware()],
 )
 
 for i in range(100):
@@ -841,16 +845,16 @@ def make_rotator() -> APIKeyRotator:
 
 ```python
 import json
+import time
 from datetime import datetime
 from apikeyrotator import (
     APIKeyRotator, AllKeysExhaustedError, AWSSecretsManagerProvider,
-    CachingMiddleware, CircuitOpenError, LoggingMiddleware, RateLimitMiddleware,
+    CachingMiddleware, CircuitOpenError, LoggingMiddleware,
 )
 
 class EnterpriseAPIClient:
     def __init__(self, secret_name: str, alert_callback=None):
         self.cache = CachingMiddleware(ttl=900, max_cache_size=5000)
-        self.rate_limit = RateLimitMiddleware(pause_on_limit=True, max_wait=30)
         self.rotator = APIKeyRotator(
             secret_provider=AWSSecretsManagerProvider(secret_name=secret_name),
             auto_refresh_interval=900,
@@ -858,7 +862,8 @@ class EnterpriseAPIClient:
             base_delay=2.0,
             total_timeout=30,
             circuit_breaker=True,
-            middlewares=[self.cache, LoggingMiddleware(verbose=True), self.rate_limit],
+            key_rate_limit=(100, 60),       # per key; parked keys are skipped
+            middlewares=[self.cache, LoggingMiddleware(verbose=True)],
         )
         self.alert_callback = alert_callback
         self.started = datetime.now()
@@ -886,7 +891,8 @@ class EnterpriseAPIClient:
             "success_rate": metrics["success_rate"],
             "keys": self.rotator.export_config()["key_statistics"],   # masked keys
             "cache": self.cache.get_stats(),
-            "rate_limits": self.rate_limit.get_stats(),
+            "rate_limited_keys": sum(s["rate_limit_reset"] > time.time()
+                                     for s in self.rotator.get_key_statistics().values()),
             "circuits": self.rotator.get_circuit_states(),
             "endpoints": metrics["endpoint_stats"],
         }
@@ -956,19 +962,19 @@ Use the bundled benchmark to measure the rotator itself
 To time your own calls:
 
 ```python
-import logging
+import time
 from apikeyrotator import APIKeyRotator
-from apikeyrotator.utils import measure_time
 
-logging.basicConfig(level=logging.DEBUG)   # measure_time logs at DEBUG level
 rotator = APIKeyRotator(api_keys=["key1", "key2"])
 
-@measure_time
-def fetch_page(i: int):
-    return rotator.get(f"https://api.example.com/data/{i}")
-
+started = time.perf_counter()
 for i in range(10):
-    fetch_page(i)
+    rotator.get(f"https://api.example.com/data/{i}")
+print(f"10 requests in {time.perf_counter() - started:.2f}s")
+
+# Per endpoint, measured by the rotator (every attempt counts)
+for endpoint, stats in rotator.get_metrics()["endpoint_stats"].items():
+    print(endpoint, stats["total_requests"], f"{stats['avg_response_time']:.3f}s")
 ```
 
 ---

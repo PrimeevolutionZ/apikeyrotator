@@ -33,10 +33,10 @@ class StateSync:
 
     __slots__ = ('backend', 'shared', 'sync_interval', 'pool', 'logger', '_on_invalid',
                  '_last_sync', '_key_ids', 'invalid_ids', '_error_logged_at', '_down_until',
-                 '_local_buckets')
+                 '_local_buckets', '_rejected_here')
 
     def __init__(self, backend: StateBackend | None, sync_interval: float, pool: KeyPool,
-                 logger: logging.Logger, on_invalid: Callable[[str], None]):
+                 logger: logging.Logger, on_invalid: Callable[[str], object]):
         self.backend = backend
         self.shared = backend is not None and backend.shared
         self.sync_interval = max(0.0, sync_interval)
@@ -45,8 +45,13 @@ class StateSync:
         self._on_invalid = on_invalid
         self._last_sync = float('-inf')
         self._key_ids: dict[str, str] = {}
+        #: Ids of keys that must not be used: rejected here, or currently banned in the backend
         self.invalid_ids: set[str] = set()
-        self._error_logged_at = 0.0
+        #: Rejected with 401/403 in this process - never used again here (no TTL)
+        self._rejected_here: set[str] = set()
+        # -inf, not 0.0: time.monotonic() counts from boot, so on a machine booted less
+        # than 30 s ago (fresh CI runner, Lambda, new VM) the first error would be silent
+        self._error_logged_at = float('-inf')
         self._down_until = float('-inf')
         self._local_buckets: InMemoryStateBackend | None = None
 
@@ -93,6 +98,8 @@ class StateSync:
         return True
 
     def apply(self, snapshot: SharedState) -> None:
+        # Bans learned from other instances expire with the backend's invalid_ttl
+        self.invalid_ids = self._rejected_here | snapshot.invalid
         if not snapshot.rate_limited and not snapshot.invalid:
             return
         by_id = {self.key_id(k): k for k in self.pool.keys()}
@@ -101,7 +108,6 @@ class StateSync:
             if key is not None:
                 self.pool.mark_rate_limited(key, until)
         for kid in snapshot.invalid:
-            self.invalid_ids.add(kid)
             key = by_id.get(kid)
             if key is not None:
                 self.logger.warning(f"Key {mask_key(key)} was invalidated by another instance")
@@ -115,6 +121,7 @@ class StateSync:
 
     def report_invalid(self, reports: list[Report], key: str) -> None:
         kid = self.key_id(key)
+        self._rejected_here.add(kid)
         self.invalid_ids.add(kid)
         if self.shared:
             reports.append(("report_invalid", (kid,)))
@@ -135,9 +142,10 @@ class StateSync:
     def acquire_token(self, key: str, capacity: int, refill_per_second: float) -> float:
         """Takes a token for `key`; returns seconds to wait (0 = acquired)."""
         kid = self.key_id(key)
-        if self.available():
+        backend = self.backend
+        if backend is not None and self.available():
             try:
-                return self.backend.acquire_token(kid, capacity, refill_per_second)
+                return backend.acquire_token(kid, capacity, refill_per_second)
             except Exception as e:
                 self.log_error("acquire_token", e)
         # Backend down: limit this process on its own rather than not at all

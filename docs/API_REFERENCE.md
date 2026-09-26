@@ -12,6 +12,7 @@ from apikeyrotator import APIKeyRotator, AsyncAPIKeyRotator, FallbackRouter, Red
 
 - [Rotators](#rotators)
   - [Constructor parameters](#constructor-parameters)
+  - [Grouped settings (config objects)](#grouped-settings-config-objects)
   - [Retry behaviour](#retry-behaviour)
   - [APIKeyRotator](#apikeyrotator)
   - [AsyncAPIKeyRotator](#asyncapikeyrotator)
@@ -49,7 +50,9 @@ APIKeyRotator(
     total_timeout=None, retry_non_idempotent=False, circuit_breaker=None,
     key_rate_limit=None, respect_rate_limit_headers=True, state_backend=None,
     state_sync_interval=1.0, auto_refresh_interval=None, auth=None, unified_response=False,
-    *, http_backend="requests", http2=False, http_client_kwargs=None,
+    auto_idempotency_key=False,
+    *, retry=None, rate_limits=None, shared_state=None, request=None,
+    http_backend="requests", http2=False, http_client_kwargs=None, http=None,
 )
 ```
 
@@ -66,7 +69,7 @@ APIKeyRotator(
 | `rotation_strategy_kwargs` | `dict \| None` | `None` | Extra strategy arguments. For `"weighted"`: `{"weights": {"key1": 3, "key2": 1}}` (missing keys get `1.0`). For `"health_based"`: `failure_threshold`, `health_check_interval`. |
 | `recovery_timeout` | `float \| None` | `None` (strategy default `60`) | Seconds after its last failure when an unhealthy key gets a probe request again. |
 
-**Retries & timeouts**
+**Retries & timeouts** (or `retry=RetryConfig(...)`, except `error_classifier`)
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -80,7 +83,9 @@ APIKeyRotator(
 | `should_retry_callback` | `Callable \| None` | `None` | `callback(response) -> bool`, called with the backend's response object (`requests`/`aiohttp`/`httpx`) in both rotators. Return `True` to retry an otherwise successful response. |
 | `error_classifier` | `ErrorClassifier \| None` | `None` | Custom classification of statuses/exceptions. |
 
-**Resilience & rate limits**
+**Resilience & rate limits** (`key_rate_limit`, `respect_rate_limit_headers` or
+`rate_limits=RateLimitConfig(...)`; `state_backend`, `state_sync_interval` or
+`shared_state=SharedStateConfig(backend=..., sync_interval=...)`)
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -90,7 +95,10 @@ APIKeyRotator(
 | `state_backend` | `StateBackend \| None` | `None` | Share rate limits, rejected keys and token buckets between rotators/processes (e.g. `RedisStateBackend`). |
 | `state_sync_interval` | `float` | `1.0` | How often (seconds) shared state is pulled from `state_backend`. |
 
-**Requests, headers & HTTP client**
+**Requests, headers & HTTP client** (`auth`, `header_callback`, `user_agents`,
+`random_delay_range`, `proxy_list` or `request=RequestConfig(...)`; `pool_size`,
+`http_backend`, `http2`, `http_client_kwargs` or `http=HTTPConfig(pool_size=..., backend=...,
+http2=..., client_kwargs=...)`)
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -123,6 +131,45 @@ accepted by the API, a `401`/`403` may mean "wrong header format" rather than "b
 the rotator then tries the other keys, and if all of them are rejected it raises
 `AuthenticationError` with the header it sent - the keys are kept and not reported to a
 shared state backend. Once any request succeeds, keys rejected earlier are removed.
+
+### Grouped settings (config objects)
+
+Instead of many flat arguments, each group can be passed as one frozen object - handy
+to keep settings in one place and share them between rotators:
+
+```python
+from apikeyrotator import (
+    APIKeyRotator, HTTPConfig, RateLimitConfig, RedisStateBackend, RequestConfig, RetryConfig,
+    SharedStateConfig,
+)
+
+retry = RetryConfig(max_retries=5, base_delay=0.5, timeout=10, total_timeout=30)
+shared = SharedStateConfig(backend=RedisStateBackend(url="redis://redis:6379/0"), sync_interval=1.0)
+
+openai = APIKeyRotator(
+    api_keys=["sk-a", "sk-b"],
+    retry=retry,
+    rate_limits=RateLimitConfig(key_rate_limit=(60, 60)),
+    shared_state=shared,
+    request=RequestConfig(auth="bearer"),
+    http=HTTPConfig(pool_size=50),
+)
+maps = APIKeyRotator(api_keys=["m-1"], retry=retry, request=RequestConfig(auth=("X-Goog-Api-Key", "{key}")))
+```
+
+| Object | Argument | Fields (same meaning and defaults as the flat arguments) |
+|---|---|---|
+| `RetryConfig` | `retry=` | `max_retries`, `base_delay`, `max_delay`, `timeout`, `total_timeout`, `retry_non_idempotent`, `auto_idempotency_key`, `should_retry_callback` |
+| `RateLimitConfig` | `rate_limits=` | `key_rate_limit`, `respect_rate_limit_headers` |
+| `SharedStateConfig` | `shared_state=` | `backend` (= `state_backend`), `sync_interval` (= `state_sync_interval`) |
+| `RequestConfig` | `request=` | `auth`, `header_callback`, `user_agents`, `proxy_list`, `random_delay_range` |
+| `HTTPConfig` | `http=` | `backend` (= `http_backend`, `None` = the rotator's default), `http2`, `pool_size`, `client_kwargs` (= `http_client_kwargs`) |
+| `CircuitBreakerConfig` | `circuit_breaker=` | see [Utilities](#circuitbreakerconfig--circuitbreaker) |
+
+- Flat arguments keep working. Giving one value both ways (`max_retries=5` and
+  `retry=RetryConfig(...)`) raises `TypeError` - there is no silent winner.
+- The rotator copies the values: `rotator.max_retries = 2` later changes that rotator
+  only, never the shared config object.
 
 ### Retry behaviour
 
@@ -405,7 +452,7 @@ Used via `state_backend=`. Keys are identified by `sha256(key)` (HMAC-SHA256 wit
 
 ```python
 RedisStateBackend(client=None, url=None, namespace="apikeyrotator", salt=None, bucket_ttl=3600,
-                  socket_timeout=1.0)
+                  socket_timeout=1.0, invalid_ttl=86400)
 ```
 
 | Parameter | Description |
@@ -416,10 +463,15 @@ RedisStateBackend(client=None, url=None, namespace="apikeyrotator", salt=None, b
 | `salt` | HMAC salt for key ids; must be the same on all instances. |
 | `bucket_ttl` | Seconds after which idle token buckets expire. |
 | `socket_timeout` | Connect/read timeout of the client created from `url` (default 1 s), so an unreachable Redis cannot stall requests. Ignored when `client` is given - set timeouts on your client. |
+| `invalid_ttl` | Seconds a key rejected with 401/403 stays banned for other instances (default one day). `None` = until `clear_invalid()`. The process that got the rejection itself does not use the key again until restarted. |
 
-Stores `{namespace}:rl` (sorted set: key id → parked-until timestamp),
-`{namespace}:invalid` (set of rejected key ids) and `{namespace}:tb:{id}` (token
-buckets, updated atomically by a Lua script using the Redis server clock).
+Stores `{namespace}:rl` (sorted set: key id → parked until), `{namespace}:revoked`
+(sorted set: rejected key id → ban expiry) and `{namespace}:tb:{id}` (token buckets).
+All times are computed by Lua scripts on the Redis server clock - clients only send
+durations - so clock differences between machines do not change how long a key is
+parked. Requires Redis 6.2+ (`ZADD GT`).
+Upgrading from 0.9.1: bans in the old `{namespace}:invalid` set are no longer read
+(it had no expiry); `clear_invalid()` also deletes it.
 Errors never fail requests: the rotator continues with local state and logs a
 warning at most every 30 s. After an error Redis is not contacted for 5 s; token
 buckets are kept per process during that time. Requires `pip install apikeyrotator[redis]`.
@@ -427,7 +479,7 @@ buckets are kept per process during that time. Requires `pip install apikeyrotat
 ### InMemoryStateBackend
 
 ```python
-InMemoryStateBackend(shared=True, salt=None)
+InMemoryStateBackend(shared=True, salt=None, invalid_ttl=86400)
 ```
 
 Same interface, in-process. Pass one instance to several rotators to share state
@@ -503,6 +555,10 @@ Logs requests, responses (with response time) and errors; masks keys and
 `max_logs_per_second`. `log_level` is applied only to its own default logger.
 
 ### RateLimitMiddleware
+
+*Deprecated in 0.9.2, removed in 1.0* (emits `DeprecationWarning`). The rotator already
+parks keys that got a `429` or report `X-RateLimit-Remaining: 0`, skips them and waits
+only when every key is parked; use `key_rate_limit=(n, seconds)` for known quotas.
 
 ```python
 RateLimitMiddleware(pause_on_limit=True, max_tracked_keys=1000, logger=None, max_wait=300.0)
@@ -658,9 +714,10 @@ await async_retry_with_backoff(func, retries=3, backoff_factor=0.5, exceptions=E
 Call `func()` (or `await func()`) up to `retries` times, sleeping
 `backoff_factor * 2 ** attempt` between attempts; the last exception is re-raised.
 
-Also in `apikeyrotator.utils`: `exponential_backoff(attempt, base_delay=1.0, max_delay=60.0)`,
-`jittered_backoff(...)`, decorators `measure_time` / `measure_time_async`
-(log execution time at DEBUG level).
+*Deprecated in 0.9.2, removed in 1.0* (emit `DeprecationWarning` on import):
+`apikeyrotator.utils.exponential_backoff`, `jittered_backoff`, `measure_time`,
+`measure_time_async`. The rotator does not use them; time calls with
+`time.perf_counter()` or read `rotator.get_metrics()["endpoint_stats"]`.
 
 ---
 

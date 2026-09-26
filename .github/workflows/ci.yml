@@ -27,6 +27,18 @@ jobs:
       - run: pip install "ruff>=0.6"
       - run: ruff check .
 
+  typecheck:
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[httpx,redis]" "mypy>=1.11" types-requests types-PyYAML
+      - run: mypy apikeyrotator
+
   docs:
     name: Docs (examples match the API, links resolve)
     runs-on: ubuntu-latest
@@ -68,7 +80,7 @@ jobs:
 
   release:
     name: Release
-    needs: [lint, docs, test]
+    needs: [lint, typecheck, docs, test]
     # A new version merged to master, or a pushed tag, becomes a tag + GitHub release
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref_type == 'tag')
     uses: ./.github/workflows/release.yml

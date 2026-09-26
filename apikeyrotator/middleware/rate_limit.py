@@ -1,5 +1,9 @@
 """
-Middleware for rate-limiting management
+Middleware for rate-limiting management (deprecated).
+
+The rotator handles rate limits itself: keys that got a 429 or report
+``X-RateLimit-Remaining: 0`` are parked until their reset and skipped, it waits only
+when every key is parked, and ``key_rate_limit=(n, seconds)`` enforces known quotas.
 """
 
 import asyncio
@@ -7,6 +11,7 @@ import logging
 import random
 import threading
 import time
+import warnings
 from typing import Any
 
 from ..utils.error_classifier import get_header, parse_retry_after, rate_limit_header_values
@@ -17,6 +22,10 @@ from .models import ErrorInfo, RequestInfo, ResponseInfo
 class RateLimitMiddleware(RotatorMiddleware):
     """
     Middleware for tracking rate limits.
+
+    .. deprecated:: 0.9.2
+        Duplicates the rotator's built-in handling (see the module docstring);
+        will be removed in 1.0.
     """
 
     def __init__(
@@ -33,6 +42,11 @@ class RateLimitMiddleware(RotatorMiddleware):
             logger: Logger for output messages
             max_wait: Upper bound (seconds) for a single pause
         """
+        warnings.warn(
+            "RateLimitMiddleware is deprecated and will be removed in 1.0: the rotator already parks "
+            "rate-limited keys (429, X-RateLimit-Remaining: 0); use key_rate_limit=(n, seconds) "
+            "for known quotas", DeprecationWarning, stacklevel=2,
+        )
         self.rate_limits: dict[str, dict[str, Any]] = {}
         self.pause_on_limit = pause_on_limit
         self.max_wait = max(0.0, max_wait)

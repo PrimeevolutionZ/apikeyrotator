@@ -9,8 +9,10 @@ import collections
 import multiprocessing as mp
 import os
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 import pytest
 
@@ -93,3 +95,19 @@ def test_revoked_key_reaches_other_processes(upstream):
     second = _run(f"{upstream}/auth", namespace, processes=2, count=5, kwargs={"state_sync_interval": 0})
     assert all(keys == ["key-b"] for _, keys in second)
     assert _Upstream.calls[("/auth", "key-a")] == before   # nobody sent the revoked key again
+
+
+def test_rate_limit_deadlines_use_the_server_clock():
+    """Machine A's clock is 1000 s ahead, machine B's 1000 s behind: both see ~30 s left."""
+    from apikeyrotator import RedisStateBackend
+
+    namespace = f"test-skew-{uuid.uuid4().hex[:8]}"
+    real_time = time.time
+    writer = RedisStateBackend(url=REDIS_URL, namespace=namespace)
+    reader = RedisStateBackend(url=REDIS_URL, namespace=namespace)
+    with patch("time.time", lambda: real_time() + 1000):
+        writer.report_rate_limited("id1", time.time() + 30)
+    with patch("time.time", lambda: real_time() - 1000):
+        left = reader.snapshot().rate_limited["id1"] - time.time()
+    assert 29 < left <= 30.5
+    writer.clear_invalid()

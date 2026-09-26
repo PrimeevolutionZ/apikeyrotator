@@ -12,6 +12,7 @@ aiohttp for sync-only users (and vice versa).
 
 from __future__ import annotations
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 
@@ -34,7 +35,8 @@ class SyncTransport:
     """Interface of a synchronous transport."""
 
     name = "base"
-    network_errors: tuple[type[BaseException], ...] = ()
+    network_errors: tuple[type[Exception], ...] = ()
+    session: Any = None
 
     def request(self, method: str, url: str, kwargs: dict[str, Any],
                 proxy: str | None, timeout: float | None) -> Any:
@@ -42,11 +44,13 @@ class SyncTransport:
 
     @staticmethod
     def status(response: Any) -> int:
-        return response.status_code
+        status: int = response.status_code
+        return status
 
     @staticmethod
     def content(response: Any) -> bytes:
-        return response.content
+        content: bytes = response.content
+        return content
 
     @staticmethod
     def close_response(response: Any) -> None:
@@ -145,11 +149,11 @@ def _httpx_kwargs(kwargs: dict[str, Any], timeout: float | None) -> tuple[dict[s
 class _HttpxClients:
     """One httpx client per proxy (httpx configures proxies per client)."""
 
-    def __init__(self, factory):
+    def __init__(self, factory: Callable[[str | None], Any]):
         self._factory = factory
         self.clients: dict[str | None, Any] = {}
 
-    def get(self, proxy: str | None):
+    def get(self, proxy: str | None) -> Any:
         client = self.clients.get(proxy)
         if client is None:
             client = self.clients[proxy] = self._factory(proxy)
@@ -220,7 +224,7 @@ class AsyncTransport:
     """Interface of an asynchronous transport."""
 
     name = "base"
-    network_errors: tuple[type[BaseException], ...] = ()
+    network_errors: tuple[type[Exception], ...] = ()
     session: Any = None
 
     async def request(self, method: str, url: str, kwargs: dict[str, Any],

@@ -60,7 +60,7 @@ class FallbackRouter:
         self.on_all_exhausted = on_all_exhausted
         self.logger = logger or logging.getLogger(__name__)
 
-    def request(self, method: str, url: str, **kwargs) -> Any:
+    def request(self, method: str, url: str, **kwargs: Any) -> Any:
         """
         Execute a synchronous request, falling back through routes as needed.
         """
@@ -98,19 +98,19 @@ class FallbackRouter:
 
         raise AllProvidersExhaustedError("All configured providers and their keys are exhausted.")
 
-    def get(self, url: str, **kwargs) -> Any:
+    def get(self, url: str, **kwargs: Any) -> Any:
         return self.request("GET", url, **kwargs)
 
-    def post(self, url: str, **kwargs) -> Any:
+    def post(self, url: str, **kwargs: Any) -> Any:
         return self.request("POST", url, **kwargs)
 
-    def put(self, url: str, **kwargs) -> Any:
+    def put(self, url: str, **kwargs: Any) -> Any:
         return self.request("PUT", url, **kwargs)
 
-    def delete(self, url: str, **kwargs) -> Any:
+    def delete(self, url: str, **kwargs: Any) -> Any:
         return self.request("DELETE", url, **kwargs)
 
-    async def request_async(self, method: str, url: str, **kwargs) -> Any:
+    async def request_async(self, method: str, url: str, **kwargs: Any) -> Any:
         """
         Execute an asynchronous request, falling back through routes as needed.
         """
@@ -151,14 +151,14 @@ class FallbackRouter:
 
         raise AllProvidersExhaustedError("All configured providers and their keys are exhausted.")
 
-    async def get_async(self, url: str, **kwargs) -> Any:
+    async def get_async(self, url: str, **kwargs: Any) -> Any:
         return await self.request_async("GET", url, **kwargs)
 
-    async def post_async(self, url: str, **kwargs) -> Any:
+    async def post_async(self, url: str, **kwargs: Any) -> Any:
         return await self.request_async("POST", url, **kwargs)
 
-    async def put_async(self, url: str, **kwargs) -> Any:
+    async def put_async(self, url: str, **kwargs: Any) -> Any:
         return await self.request_async("PUT", url, **kwargs)
 
-    async def delete_async(self, url: str, **kwargs) -> Any:
+    async def delete_async(self, url: str, **kwargs: Any) -> Any:
         return await self.request_async("DELETE", url, **kwargs)

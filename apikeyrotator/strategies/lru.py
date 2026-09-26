@@ -65,7 +65,8 @@ class LRURotationStrategy(BaseRotationStrategy):
             # Single pass: least recently handed out among available keys, falling back
             # to the least recently handed out key overall. Keys never handed out by this
             # strategy come first (-1), ordered by their last use in the rotator's metrics.
-            best_key = best_any = None
+            best_key: str | None = None
+            best_any: str | None = None
             best_rank = best_any_rank = (float('inf'), 0.0)
             for k in self._keys:
                 ext = ext_get(k) if ext_get is not None else None
@@ -76,6 +77,7 @@ class LRURotationStrategy(BaseRotationStrategy):
                 if rank < best_rank and (ext_get is None or available(ext, now, recovery_timeout)):
                     best_key, best_rank = k, rank
             lru_key = best_key if best_key is not None else best_any
+            assert lru_key is not None   # self._keys is not empty
 
             # Mark as used in internal state only - external metrics are owned
             # (and updated) by the rotator itself.

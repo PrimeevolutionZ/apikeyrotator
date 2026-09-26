@@ -3,7 +3,7 @@
 from __future__ import annotations
 import json
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import timedelta
 from http import HTTPStatus
 from typing import Any
@@ -64,8 +64,10 @@ class CachedAsyncResponse:
     async def text(self, encoding: str = 'utf-8') -> str:
         return self._content.decode(encoding)
 
-    async def json(self, **kwargs) -> Any:
-        return json.loads(self._content)
+    async def json(self, *, encoding: str | None = None, loads: Callable[[str], Any] = json.loads,
+                   content_type: str | None = "application/json") -> Any:
+        """Same arguments as aiohttp's ``ClientResponse.json()`` (``content_type`` is not checked)."""
+        return loads(self._content.decode(encoding or "utf-8"))
 
     def raise_for_status(self) -> None:
         if self.status >= 400:
@@ -112,7 +114,7 @@ def build_sync_response(info: ResponseInfo, url: str, backend: str = "requests")
     response = requests.Response()
     response.status_code = info.status_code
     response._content = content
-    response._content_consumed = True
+    response._content_consumed = True  # type: ignore[attr-defined]
     response.headers.update(headers)
     response.url = url
     response.encoding = requests.utils.get_encoding_from_headers(response.headers)
@@ -155,6 +157,12 @@ class Headers(Mapping[str, str]):
         self._items, self._index, self._source = items, index, None
         return index
 
+    def _pairs(self) -> list[tuple[str, str]]:
+        if self._items is None:
+            self._load()
+        assert self._items is not None
+        return self._items
+
     def __getitem__(self, name: str) -> str:
         index = self._index if self._index is not None else self._load()
         return ", ".join(index[name.lower()])
@@ -164,10 +172,8 @@ class Headers(Mapping[str, str]):
         return isinstance(name, str) and name.lower() in index
 
     def __iter__(self) -> Iterator[str]:
-        if self._index is None:
-            self._load()
         seen = set()
-        for k, _ in self._items:
+        for k, _ in self._pairs():
             if k.lower() not in seen:
                 seen.add(k.lower())
                 yield k
@@ -183,9 +189,7 @@ class Headers(Mapping[str, str]):
 
     def multi_items(self) -> list[tuple[str, str]]:
         """All (name, value) pairs as sent, including repeated headers."""
-        if self._index is None:
-            self._load()
-        return list(self._items)
+        return list(self._pairs())
 
     def __repr__(self) -> str:
         return f"Headers({dict(self)!r})"
@@ -196,9 +200,11 @@ def _header_items(headers: Any) -> Iterable[tuple[str, str]]:
         return ()
     multi = getattr(headers, "multi_items", None)  # httpx
     if multi is not None:
-        return multi()
+        pairs: Iterable[tuple[str, str]] = multi()
+        return pairs
     items = getattr(headers, "items", None)       # requests/urllib3, aiohttp (multidict), dict
-    return items() if items is not None else headers
+    pairs = items() if items is not None else headers
+    return pairs
 
 
 _PHRASES = {status.value: status.phrase for status in HTTPStatus}
@@ -296,7 +302,7 @@ class UnifiedResponse:
         except LookupError:  # unknown charset
             return self.content.decode("utf-8", errors="replace")
 
-    def json(self, **kwargs) -> Any:
+    def json(self, **kwargs: Any) -> Any:
         """Parses the body as JSON (raises json.JSONDecodeError for non-JSON bodies)."""
         try:
             return json.loads(self.content, **kwargs)
@@ -327,13 +333,13 @@ class UnifiedResponse:
     def __enter__(self) -> UnifiedResponse:
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
         return None
 
     async def __aenter__(self) -> UnifiedResponse:
         return self
 
-    async def __aexit__(self, *exc) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         return None
 
     def __repr__(self) -> str:

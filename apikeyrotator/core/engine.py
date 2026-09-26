@@ -37,6 +37,7 @@ come back as NetworkFailure) are thrown into the generator, so its cleanup
 
 from __future__ import annotations
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable, Generator
@@ -81,7 +82,7 @@ class NetworkFailure:
     """Result of SEND/READ when the transport raised one of its network errors."""
     __slots__ = ('error', 'safe_to_retry')
 
-    def __init__(self, error: BaseException, safe_to_retry: bool):
+    def __init__(self, error: Exception, safe_to_retry: bool):
         self.error = error
         #: True if the request certainly never reached the server (e.g. connection refused)
         self.safe_to_retry = safe_to_retry
@@ -139,9 +140,10 @@ class RequestContext:
                 breaker.record_failure()
 
     def release_breaker(self) -> None:
-        if self.breaker_pending:
+        breaker = self.breaker
+        if self.breaker_pending and breaker is not None:
             self.breaker_pending = False
-            self.breaker.release_probe()
+            breaker.release_probe()
 
     def remaining(self) -> float | None:
         if self.deadline is None:
@@ -293,6 +295,7 @@ class RequestEngine:
 
                 response_info = None
                 if middlewares:
+                    assert request_info is not None   # BEFORE ran: middlewares are present
                     response_info = ResponseInfo(
                         status_code=status, headers=dict(headers), content=content,
                         request_info=request_info, response_time=request_time,
@@ -310,7 +313,7 @@ class RequestEngine:
                 if response_info is not None:
                     yield (ON_ERROR, ErrorInfo(
                         exception=HTTPStatusError(status),
-                        request_info=request_info, response_info=response_info,
+                        request_info=response_info.request_info, response_info=response_info,
                     ))
 
                 if not release_native:
@@ -343,7 +346,11 @@ class RequestEngine:
                 exc.possibly_processed = True
             ctx.release_breaker()
             if ctx.reports:
-                yield from self._flush(ctx, offload)
+                if isinstance(exc, Exception):
+                    yield from self._flush(ctx, offload)
+                else:
+                    # Cancellation / KeyboardInterrupt / SystemExit must not wait for Redis
+                    self._flush_detached(ctx)
             raise
         ctx.release_breaker()
         if ctx.reports:
@@ -363,11 +370,13 @@ class RequestEngine:
 
     def _pull_state(self, offload: bool) -> Flow:
         state = self.state
+        backend = state.backend
+        assert backend is not None   # only called when the backend is shared
         try:
             if offload:
-                snapshot = yield (CALL, state.backend.snapshot, ())
+                snapshot = yield (CALL, backend.snapshot, ())
             else:
-                snapshot = state.backend.snapshot()
+                snapshot = backend.snapshot()
         except Exception as e:
             state.log_error("snapshot", e)
             return
@@ -379,6 +388,16 @@ class RequestEngine:
             yield (CALL, self.state.flush, (reports,))
         else:
             self.state.flush(reports)
+
+    def _flush_detached(self, ctx: RequestContext) -> None:
+        """Sends pending reports without blocking the caller (a daemon thread for network backends)."""
+        reports, ctx.reports = ctx.reports, []
+        state = self.state
+        if state.blocking:
+            threading.Thread(target=state.flush, args=(reports,), name="apikeyrotator-flush",
+                             daemon=True).start()
+        else:
+            state.flush(reports)
 
     def _network_failure(self, ctx: RequestContext, key: str, failure: NetworkFailure,
                          start: float, request_info: Any) -> Flow:

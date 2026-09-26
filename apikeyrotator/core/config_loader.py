@@ -82,7 +82,7 @@ class ConfigLoader:
         """
         return self.config.get(key, default)
 
-    def save_config(self, config: dict[str, Any] | None = None):
+    def save_config(self, config: dict[str, Any] | None = None) -> None:
         """
         Saves the configuration to a file.
 
@@ -119,7 +119,7 @@ class ConfigLoader:
                 self.logger.error(f"Error saving config to {self.config_file}: {e}")
             raise
 
-    def update_config(self, new_data: dict[str, Any]):
+    def update_config(self, new_data: dict[str, Any]) -> None:
         """
         Updates the configuration with new data and saves it to file.
 

@@ -1,5 +1,6 @@
+"""Retry helpers for code outside the rotator (used by the secret providers)."""
+
 import asyncio
-import functools
 import logging
 import time
 from collections.abc import Callable
@@ -142,117 +143,12 @@ async def async_retry_with_backoff(
             await asyncio.sleep(delay)
 
 
-def exponential_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
-    """
-    Calculates delay for exponential backoff.
+def __getattr__(name: str) -> Any:
+    from . import _deprecated
 
-    Args:
-        attempt: Attempt number (starting from 0)
-        base_delay: Base delay in seconds (default 1.0)
-        max_delay: Maximum delay in seconds (default 60.0)
-
-    Returns:
-        float: Delay in seconds
-
-    Examples:
-        >>> for i in range(5):
-        ...     delay = exponential_backoff(i)
-        ...     print(f"Attempt {i}: {delay}s")
-        Attempt 0: 1.0s
-        Attempt 1: 2.0s
-        Attempt 2: 4.0s
-        Attempt 3: 8.0s
-        Attempt 4: 16.0s
-    """
-    delay = base_delay * (2 ** attempt)
-    return min(delay, max_delay)
-
-
-def jittered_backoff(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
-    """
-    Calculates delay with added random jitter.
-
-    Adding jitter helps avoid the "thundering herd problem"
-    when many clients retry requests simultaneously.
-
-    Args:
-        attempt: Attempt number (starting from 0)
-        base_delay: Base delay in seconds (default 1.0)
-        max_delay: Maximum delay in seconds (default 60.0)
-
-    Returns:
-        float: Delay in seconds with jitter
-
-    Examples:
-        >>> import random
-        >>> random.seed(42)
-        >>> for i in range(3):
-        ...     delay = jittered_backoff(i)
-        ...     print(f"Attempt {i}: {delay:.2f}s")
-    """
-    import random
-    base = exponential_backoff(attempt, base_delay, max_delay)
-    jitter = random.uniform(0, base * 0.1)  # Add up to 10% random jitter
-    return min(base + jitter, max_delay)
-
-
-# Backwards compatible re-export: the implementation lives in circuit_breaker.py
-from .circuit_breaker import CircuitBreaker  # noqa: E402,F401
-
-
-def measure_time(func: Callable) -> Callable:
-    """
-    Decorator for measuring function execution time.
-
-    Args:
-        func: Function to measure
-
-    Returns:
-        Callable: Wrapped function
-
-    Examples:
-        >>> @measure_time
-        ... def slow_function():
-        ...     time.sleep(1)
-        ...     return "done"
-        >>> result = slow_function()
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        result = func(*args, **kwargs)
-        elapsed = time.time() - start
-        logger.debug(f"{func.__name__} took {elapsed:.2f}s")
-        return result
-
-    return wrapper
-
-
-def measure_time_async(func: Callable) -> Callable:
-    """
-    Decorator for measuring async function execution time.
-
-    Args:
-        func: Async function to measure
-
-    Returns:
-        Callable: Wrapped function
-
-    Examples:
-        >>> @measure_time_async
-        ... async def slow_function():
-        ...     await asyncio.sleep(1)
-        ...     return "done"
-        >>> result = await slow_function()
-    """
-
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        start = time.time()
-        result = await func(*args, **kwargs)
-        elapsed = time.time() - start
-        logger.debug(f"{func.__name__} took {elapsed:.2f}s")
-        return result
-
-    return wrapper
+    if name in _deprecated.REPLACEMENTS:
+        return _deprecated.warn(name, __name__)
+    if name == "CircuitBreaker":   # was re-exported here before 0.9.2
+        from .circuit_breaker import CircuitBreaker
+        return CircuitBreaker
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
